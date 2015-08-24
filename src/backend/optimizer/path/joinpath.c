@@ -76,13 +76,15 @@ add_paths_to_joinrel(PlannerInfo *root,
 					 RelOptInfo *innerrel,
 					 JoinType jointype,
 					 SpecialJoinInfo *sjinfo,
-					 List *restrictlist)
+					 List *restrictlist,
+					 List *added_restrictlist)
 {
 	JoinPathExtraData extra;
 	bool		mergejoin_allowed = true;
 	ListCell   *lc;
 
 	extra.restrictlist = restrictlist;
+	extra.added_restrictlist = added_restrictlist;
 	extra.mergeclause_list = NIL;
 	extra.sjinfo = sjinfo;
 	extra.param_source_rels = NULL;

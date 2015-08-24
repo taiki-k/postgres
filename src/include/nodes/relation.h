@@ -1702,6 +1702,7 @@ typedef struct JoinPathExtraData
 {
 	List	   *restrictlist;
 	List	   *mergeclause_list;
+	List	   *added_restrictlist;
 	SpecialJoinInfo *sjinfo;
 	SemiAntiJoinFactors semifactors;
 	Relids		param_source_rels;

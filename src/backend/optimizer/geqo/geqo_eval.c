@@ -261,7 +261,8 @@ merge_clump(PlannerInfo *root, List *clumps, Clump *new_clump, bool force)
 			 */
 			joinrel = make_join_rel(root,
 									old_clump->joinrel,
-									new_clump->joinrel);
+									new_clump->joinrel,
+									NIL);
 
 			/* Keep searching if join order is not valid */
 			if (joinrel)

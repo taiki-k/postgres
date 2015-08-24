@@ -87,7 +87,7 @@ extern void create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel);
 extern void add_paths_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
 					 RelOptInfo *outerrel, RelOptInfo *innerrel,
 					 JoinType jointype, SpecialJoinInfo *sjinfo,
-					 List *restrictlist);
+					 List *restrictlist, List *added_restrictlist);
 
 /*
  * joinrels.c
@@ -95,7 +95,7 @@ extern void add_paths_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
  */
 extern void join_search_one_level(PlannerInfo *root, int level);
 extern RelOptInfo *make_join_rel(PlannerInfo *root,
-			  RelOptInfo *rel1, RelOptInfo *rel2);
+			  RelOptInfo *rel1, RelOptInfo *rel2, List *added_restrictlist);
 extern bool have_join_order_restriction(PlannerInfo *root,
 							RelOptInfo *rel1, RelOptInfo *rel2);
 

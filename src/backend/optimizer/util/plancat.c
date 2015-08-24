@@ -54,9 +54,6 @@ get_relation_info_hook_type get_relation_info_hook = NULL;
 static bool infer_collation_opclass_match(InferenceElem *elem, Relation idxRel,
 							  List *idxExprs);
 static int32 get_rel_data_width(Relation rel, int32 *attr_widths);
-static List *get_relation_constraints(PlannerInfo *root,
-						 Oid relationObjectId, RelOptInfo *rel,
-						 bool include_notnull);
 static List *build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 				  Relation heapRelation);
 
@@ -1022,7 +1019,7 @@ get_relation_data_width(Oid relid, int32 *attr_widths)
  * run, and in many cases it won't be invoked at all, so there seems no
  * point in caching the data in RelOptInfo.
  */
-static List *
+List *
 get_relation_constraints(PlannerInfo *root,
 						 Oid relationObjectId, RelOptInfo *rel,
 						 bool include_notnull)
