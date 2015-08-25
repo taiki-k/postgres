@@ -18,9 +18,21 @@
 
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
+#include "nodes/nodeFuncs.h"
+#include "nodes/nodes.h"
+#include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/plancat.h"
+#include "optimizer/restrictinfo.h"
+#include "rewrite/rewriteManip.h"
+#include "utils/lsyscache.h"
+
+typedef struct
+{
+	List	*joininfo;
+} check_constraint_mutator_context;
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -44,6 +56,11 @@ static List *select_mergejoin_clauses(PlannerInfo *root,
 						 List *restrictlist,
 						 JoinType jointype,
 						 bool *mergejoin_allowed);
+
+static void try_join_pushdown(PlannerInfo *root,
+						  RelOptInfo *joinrel, RelOptInfo *outer_rel,
+						  RelOptInfo *inner_rel,
+						  List *restrictlist, List *added_restrictlist);
 
 
 /*
@@ -82,6 +99,15 @@ add_paths_to_joinrel(PlannerInfo *root,
 	JoinPathExtraData extra;
 	bool		mergejoin_allowed = true;
 	ListCell   *lc;
+
+	/*
+	 * Try to push Join down under Append
+	 */
+	if (!IS_OUTER_JOIN(jointype))
+	{
+		try_join_pushdown(root, joinrel, outerrel, innerrel,
+				restrictlist, added_restrictlist);
+	}
 
 	extra.restrictlist = restrictlist;
 	extra.added_restrictlist = added_restrictlist;
@@ -419,6 +445,7 @@ try_nestloop_path(PlannerInfo *root,
 									  outer_path,
 									  inner_path,
 									  extra->restrictlist,
+									  extra->added_restrictlist,
 									  pathkeys,
 									  required_outer));
 	}
@@ -501,6 +528,7 @@ try_mergejoin_path(PlannerInfo *root,
 									   outer_path,
 									   inner_path,
 									   extra->restrictlist,
+									   extra->added_restrictlist,
 									   pathkeys,
 									   required_outer,
 									   mergeclauses,
@@ -573,6 +601,7 @@ try_hashjoin_path(PlannerInfo *root,
 									  outer_path,
 									  inner_path,
 									  extra->restrictlist,
+									  extra->added_restrictlist,
 									  required_outer,
 									  hashclauses));
 	}
@@ -1475,4 +1504,247 @@ select_mergejoin_clauses(PlannerInfo *root,
 	}
 
 	return result_list;
+}
+
+static Node *
+check_constraint_mutator(Node *node, check_constraint_mutator_context *context)
+{
+	if (IsA(node, Var))
+	{
+		List		*l = context->joininfo;
+		ListCell	*lc;
+
+		Assert(list_length(l) > 0);
+
+		foreach (lc, l)
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+			Expr *expr = rinfo->clause;
+
+			if (!rinfo->can_join ||
+				!IsA(expr, OpExpr) ||
+				!op_hashjoinable(((OpExpr *) expr)->opno,
+								exprType(get_leftop(expr))))
+				continue;
+
+			if (equal(get_leftop(expr), node))
+			{
+				/*
+				 * This node is equal to LEFT of join clause,
+				 * thus will be replaced with RIGHT clause.
+				 */
+				return (Node *) copyObject(get_rightop(expr));
+			}
+			else
+			if (equal(get_rightop(expr), node))
+			{
+				/*
+				 * This node is equal to RIGHT of join clause,
+				 * thus will be replaced with LEFT clause.
+				 */
+				return (Node *) copyObject(get_leftop(expr));
+			}
+		}
+
+		return (Node *) copyObject(node);
+	}
+
+	return expression_tree_mutator(node, check_constraint_mutator, context);
+}
+
+/*
+ * Make RestrictInfo_List from CHECK() constraints.
+ */
+static List *
+make_restrictinfos_from_check_constr(PlannerInfo *root,
+									List *joininfo, RelOptInfo *outer_rel)
+{
+	List			*result = NIL;
+	RangeTblEntry	*childRTE = root->simple_rte_array[outer_rel->relid];
+	List			*check_constr =
+						get_relation_constraints(root, childRTE->relid,
+													outer_rel, false);
+	ListCell		*lc;
+
+	check_constraint_mutator_context	context;
+
+	context.joininfo = joininfo;
+
+	/*
+	 * Try to change CHECK() constraints to filter expressions.
+	 */
+	foreach(lc, check_constr)
+	{
+		result = lappend(result,
+						expression_tree_mutator((Node *) lfirst(lc),
+												check_constraint_mutator,
+												(void *) &context));
+	}
+
+	Assert(list_length(check_constr) == list_length(result));
+	list_free_deep(check_constr);
+
+	return make_restrictinfos_from_actual_clauses(root, result);
+}
+
+/*
+ * Mutate parent's relid to child one.
+ */
+static List *
+mutate_parent_relid_to_child(PlannerInfo *root, List *join_clauses,
+								RelOptInfo *outer_rel)
+{
+	Index		parent_relid =
+					find_childrel_appendrelinfo(root, outer_rel)->parent_relid;
+	List		*old_clauses = get_actual_clauses(join_clauses);
+	List		*new_clauses = NIL;
+	ListCell	*lc;
+
+	foreach(lc, old_clauses)
+	{
+		Node	*new_clause = (Node *) copyObject(lfirst(lc));
+
+		ChangeVarNodes(new_clause, parent_relid, outer_rel->relid, 0);
+		new_clauses = lappend(new_clauses, new_clause);
+	}
+
+	return make_restrictinfos_from_actual_clauses(root, new_clauses);
+}
+
+static inline List *
+extract_join_clauses(List *restrictlist, RelOptInfo *outer_prel,
+						RelOptInfo *inner_rel)
+{
+	List		*result = NIL;
+	ListCell	*lc;
+
+	foreach (lc, restrictlist)
+	{
+		RestrictInfo	*rinfo = (RestrictInfo *) lfirst(lc);
+
+		if ((bms_is_subset(rinfo->left_relids, outer_prel->relids) &&
+			 bms_is_subset(rinfo->right_relids, inner_rel->relids)) ||
+			(bms_is_subset(rinfo->left_relids, inner_rel->relids) &&
+			 bms_is_subset(rinfo->right_relids, outer_prel->relids)))
+		{
+			result = lappend(result, rinfo);
+		}
+	}
+
+	return result;
+}
+
+/*
+  Try to push JoinPath down under AppendPath.
+*/
+static void
+try_join_pushdown(PlannerInfo *root,
+				  RelOptInfo *joinrel, RelOptInfo *outer_rel,
+				  RelOptInfo *inner_rel,
+				  List *restrictlist, List *added_restrictlist)
+{
+	AppendPath	*outer_path;
+	ListCell	*lc;
+	List		*old_joinclauses;
+	List		*new_append_subpaths = NIL;
+
+	Assert(outer_rel->cheapest_total_path != NULL);
+
+	/* When specified outer path is not an AppendPath, nothing to do here. */
+	if (!IsA(outer_rel->cheapest_total_path, AppendPath))
+	{
+		elog(DEBUG1, "Outer path is not an AppendPath. Do nothing.");
+		return;
+	}
+
+	outer_path = (AppendPath *) outer_rel->cheapest_total_path;
+
+	/*
+	 * Extract join clauses to mutate CHECK() constraints.
+	 * We don't have to clobber this list to mutate CHECK() constraints,
+	 * so we need to do only once.
+	 */
+	old_joinclauses = extract_join_clauses(restrictlist, outer_rel, inner_rel);
+
+	/*
+	  * Make new joinrel between each of outer path's sub-paths and inner path.
+	  */
+	foreach(lc, outer_path->subpaths)
+	{
+		RelOptInfo	*old_outer_rel = ((Path *) lfirst(lc))->parent;
+		RelOptInfo	*new_outer_rel;
+		List		*new_joinclauses;
+		List		*new_added_restrictlist = list_copy(added_restrictlist);
+		List		**join_rel_level;
+
+		Assert(!IS_DUMMY_REL(old_outer_rel));
+
+		/*
+		 * Join clause points parent's relid,
+		 * so we must change it to child's one.
+		 */
+		new_joinclauses = mutate_parent_relid_to_child(root, old_joinclauses,
+													old_outer_rel);
+
+		/*
+		 * Make RestrictInfo list from CHECK() constraints of outer table.
+		 */
+		new_added_restrictlist =
+				lappend(new_added_restrictlist,
+						make_restrictinfos_from_check_constr(
+											root,
+											new_joinclauses,
+											old_outer_rel));
+
+
+		/* XXX This is workaround for failing assertion at allpaths.c */
+		join_rel_level = root->join_rel_level;
+		root->join_rel_level = NULL;
+
+		/*
+		 * Create new joinrel with restriction made above.
+		 */
+		new_outer_rel =
+				make_join_rel(root, old_outer_rel, inner_rel,
+						new_added_restrictlist);
+
+		root->join_rel_level = join_rel_level;
+
+		Assert(new_outer_rel != NULL);
+
+		if (IS_DUMMY_REL(new_outer_rel))
+		{
+			pfree(new_outer_rel);
+			continue;
+		}
+
+		/*
+		 * We must check if each of all new joinrels have one path at least.
+		 * add_path() sometime rejects to add new path to parent RelOptInfo.
+		 */
+		if (list_length(new_outer_rel->pathlist) <= 0)
+		{
+			/*
+			 * Sadly, No paths added. This means that pushdown is failed,
+			 * thus clean up here.
+			 */
+			list_free_deep(new_append_subpaths);
+			pfree(new_outer_rel);
+			list_free(old_joinclauses);
+			elog(DEBUG1, "Join pushdown failed.");
+			return;
+		}
+
+		set_cheapest(new_outer_rel);
+		Assert(new_outer_rel->cheapest_total_path != NULL);
+		new_append_subpaths = lappend(new_append_subpaths,
+									new_outer_rel->cheapest_total_path);
+	}
+
+	/* Join Pushdown is succeeded. Add path to original joinrel. */
+	add_path(joinrel,
+			(Path *) create_append_path(joinrel, new_append_subpaths, NULL));
+
+	list_free(old_joinclauses);
+	elog(DEBUG1, "Join pushdown succeeded.");
 }
