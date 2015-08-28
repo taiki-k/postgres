@@ -2251,7 +2251,7 @@ create_nestloop_plan(PlannerInfo *root,
 
 	/* Sort join qual clauses into best execution order */
 	joinrestrictclauses = order_qual_clauses(root, joinrestrictclauses);
-	filterclauses = order_qual_clauses(root, best_path->jpath.filterrestrictinfo);
+	filterclauses = order_qual_clauses(root, best_path->filterrestrictinfo);
 
 	/* Get the join qual clauses (in plain expression form) */
 	/* Any pseudoconstant clauses are ignored here */
