@@ -60,7 +60,7 @@ static List *select_mergejoin_clauses(PlannerInfo *root,
 static void try_join_pushdown(PlannerInfo *root,
 						  RelOptInfo *joinrel, RelOptInfo *outer_rel,
 						  RelOptInfo *inner_rel,
-						  List *restrictlist, List *added_restrictlist);
+						  List *restrictlist);
 
 
 /*
@@ -105,8 +105,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 */
 	if (!IS_OUTER_JOIN(jointype))
 	{
-		try_join_pushdown(root, joinrel, outerrel, innerrel,
-				restrictlist, added_restrictlist);
+		try_join_pushdown(root, joinrel, outerrel, innerrel, restrictlist);
 	}
 
 	extra.restrictlist = restrictlist;
@@ -1509,6 +1508,9 @@ select_mergejoin_clauses(PlannerInfo *root,
 static Node *
 check_constraint_mutator(Node *node, check_constraint_mutator_context *context)
 {
+	if (node == NULL)
+		return NULL;
+
 	if (IsA(node, Var))
 	{
 		List		*l = context->joininfo;
@@ -1622,13 +1624,8 @@ extract_join_clauses(List *restrictlist, RelOptInfo *outer_prel,
 	{
 		RestrictInfo	*rinfo = (RestrictInfo *) lfirst(lc);
 
-		if ((bms_is_subset(rinfo->left_relids, outer_prel->relids) &&
-			 bms_is_subset(rinfo->right_relids, inner_rel->relids)) ||
-			(bms_is_subset(rinfo->left_relids, inner_rel->relids) &&
-			 bms_is_subset(rinfo->right_relids, outer_prel->relids)))
-		{
+		if (clause_sides_match_join(rinfo, outer_prel, inner_rel))
 			result = lappend(result, rinfo);
-		}
 	}
 
 	return result;
@@ -1641,7 +1638,7 @@ static void
 try_join_pushdown(PlannerInfo *root,
 				  RelOptInfo *joinrel, RelOptInfo *outer_rel,
 				  RelOptInfo *inner_rel,
-				  List *restrictlist, List *added_restrictlist)
+				  List *restrictlist)
 {
 	AppendPath	*outer_path;
 	ListCell	*lc;
@@ -1674,7 +1671,7 @@ try_join_pushdown(PlannerInfo *root,
 		RelOptInfo	*old_outer_rel = ((Path *) lfirst(lc))->parent;
 		RelOptInfo	*new_outer_rel;
 		List		*new_joinclauses;
-		List		*new_added_restrictlist = list_copy(added_restrictlist);
+		List		*added_restrictlist = NIL;
 		List		**join_rel_level;
 
 		Assert(!IS_DUMMY_REL(old_outer_rel));
@@ -1689,8 +1686,8 @@ try_join_pushdown(PlannerInfo *root,
 		/*
 		 * Make RestrictInfo list from CHECK() constraints of outer table.
 		 */
-		new_added_restrictlist =
-				lappend(new_added_restrictlist,
+		added_restrictlist =
+				lappend(added_restrictlist,
 						make_restrictinfos_from_check_constr(
 											root,
 											new_joinclauses,
@@ -1706,7 +1703,7 @@ try_join_pushdown(PlannerInfo *root,
 		 */
 		new_outer_rel =
 				make_join_rel(root, old_outer_rel, inner_rel,
-						new_added_restrictlist);
+						added_restrictlist);
 
 		root->join_rel_level = join_rel_level;
 

@@ -591,6 +591,7 @@ typedef struct Join
 	Plan		plan;
 	JoinType	jointype;
 	List	   *joinqual;		/* JOIN quals (in addition to plan.qual) */
+	List	   *filterqual;		/* FILTER quals (in addition to plan.qual) */
 } Join;
 
 /* ----------------
@@ -762,6 +763,7 @@ typedef struct Unique
 typedef struct Hash
 {
 	Plan		plan;
+	List	   *filterqual;		/* FILTER quals (in addition to plan.qual) */
 	Oid			skewTable;		/* outer join key's table OID, or InvalidOid */
 	AttrNumber	skewColumn;		/* outer join key's column #, or zero */
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */

@@ -472,6 +472,8 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hjstate->js.joinqual = (List *)
 		ExecInitExpr((Expr *) node->join.joinqual,
 					 (PlanState *) hjstate);
+	 /* filterqual is not needed here, needed in Hash instead*/
+	hjstate->js.filterqual = NIL;
 	hjstate->hashclauses = (List *)
 		ExecInitExpr((Expr *) node->hashclauses,
 					 (PlanState *) hjstate);

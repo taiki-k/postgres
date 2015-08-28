@@ -1642,6 +1642,7 @@ typedef struct JoinState
 	PlanState	ps;
 	JoinType	jointype;
 	List	   *joinqual;		/* JOIN quals (in addition to ps.qual) */
+	List	   *filterqual;		/* FILTER quals (in addition to ps.qual) */
 } JoinState;
 
 /* ----------------
@@ -1955,6 +1956,7 @@ typedef struct UniqueState
 typedef struct HashState
 {
 	PlanState	ps;				/* its first field is NodeTag */
+	List	   *filterqual;		/* FILTER quals (in addition to ps.qual) */
 	HashJoinTable hashtable;	/* hash table for the hashjoin */
 	List	   *hashkeys;		/* list of ExprState nodes */
 	/* hashkeys is same as parent's hj_InnerHashKeys */

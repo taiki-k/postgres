@@ -135,7 +135,8 @@ static WorkTableScan *make_worktablescan(List *qptlist, List *qpqual,
 static BitmapAnd *make_bitmap_and(List *bitmapplans);
 static BitmapOr *make_bitmap_or(List *bitmapplans);
 static NestLoop *make_nestloop(List *tlist,
-			  List *joinclauses, List *otherclauses, List *nestParams,
+			  List *joinclauses,  List *filterclauses,
+			  List *otherclauses, List *nestParams,
 			  Plan *lefttree, Plan *righttree,
 			  JoinType jointype);
 static HashJoin *make_hashjoin(List *tlist,
@@ -144,14 +145,15 @@ static HashJoin *make_hashjoin(List *tlist,
 			  Plan *lefttree, Plan *righttree,
 			  JoinType jointype);
 static Hash *make_hash(Plan *lefttree,
+		  List *filterclauses,
 		  Oid skewTable,
 		  AttrNumber skewColumn,
 		  bool skewInherit,
 		  Oid skewColType,
 		  int32 skewColTypmod);
 static MergeJoin *make_mergejoin(List *tlist,
-			   List *joinclauses, List *otherclauses,
-			   List *mergeclauses,
+			   List *joinclauses, List *filterclauses,
+			   List *otherclauses, List *mergeclauses,
 			   Oid *mergefamilies,
 			   Oid *mergecollations,
 			   int *mergestrategies,
@@ -2239,6 +2241,7 @@ create_nestloop_plan(PlannerInfo *root,
 	List	   *tlist = build_path_tlist(root, &best_path->path);
 	List	   *joinrestrictclauses = best_path->joinrestrictinfo;
 	List	   *joinclauses;
+	List	   *filterclauses;
 	List	   *otherclauses;
 	Relids		outerrelids;
 	List	   *nestParams;
@@ -2248,6 +2251,7 @@ create_nestloop_plan(PlannerInfo *root,
 
 	/* Sort join qual clauses into best execution order */
 	joinrestrictclauses = order_qual_clauses(root, joinrestrictclauses);
+	filterclauses = order_qual_clauses(root, best_path->jpath.filterrestrictinfo);
 
 	/* Get the join qual clauses (in plain expression form) */
 	/* Any pseudoconstant clauses are ignored here */
@@ -2262,6 +2266,8 @@ create_nestloop_plan(PlannerInfo *root,
 		joinclauses = extract_actual_clauses(joinrestrictclauses, false);
 		otherclauses = NIL;
 	}
+
+	filterclauses = extract_actual_clauses(filterclauses, false);
 
 	/* Replace any outer-relation variables with nestloop params */
 	if (best_path->path.param_info)
@@ -2309,6 +2315,7 @@ create_nestloop_plan(PlannerInfo *root,
 
 	join_plan = make_nestloop(tlist,
 							  joinclauses,
+							  filterclauses,
 							  otherclauses,
 							  nestParams,
 							  outer_plan,
@@ -2328,6 +2335,7 @@ create_mergejoin_plan(PlannerInfo *root,
 {
 	List	   *tlist = build_path_tlist(root, &best_path->jpath.path);
 	List	   *joinclauses;
+	List	   *filterclauses;
 	List	   *otherclauses;
 	List	   *mergeclauses;
 	List	   *outerpathkeys;
@@ -2346,6 +2354,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	/* Sort join qual clauses into best execution order */
 	/* NB: do NOT reorder the mergeclauses */
 	joinclauses = order_qual_clauses(root, best_path->jpath.joinrestrictinfo);
+	filterclauses = order_qual_clauses(root, best_path->jpath.filterrestrictinfo);
 
 	/* Get the join qual clauses (in plain expression form) */
 	/* Any pseudoconstant clauses are ignored here */
@@ -2361,6 +2370,7 @@ create_mergejoin_plan(PlannerInfo *root,
 		otherclauses = NIL;
 	}
 
+	filterclauses = extract_actual_clauses(filterclauses, false);
 	/*
 	 * Remove the mergeclauses from the list of join qual clauses, leaving the
 	 * list of quals that must be checked as qpquals.
@@ -2599,6 +2609,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	 */
 	join_plan = make_mergejoin(tlist,
 							   joinclauses,
+							   filterclauses,
 							   otherclauses,
 							   mergeclauses,
 							   mergefamilies,
@@ -2623,6 +2634,7 @@ create_hashjoin_plan(PlannerInfo *root,
 {
 	List	   *tlist = build_path_tlist(root, &best_path->jpath.path);
 	List	   *joinclauses;
+	List	   *filterclauses;
 	List	   *otherclauses;
 	List	   *hashclauses;
 	Oid			skewTable = InvalidOid;
@@ -2635,6 +2647,7 @@ create_hashjoin_plan(PlannerInfo *root,
 
 	/* Sort join qual clauses into best execution order */
 	joinclauses = order_qual_clauses(root, best_path->jpath.joinrestrictinfo);
+	filterclauses = order_qual_clauses(root, best_path->jpath.filterrestrictinfo);
 	/* There's no point in sorting the hash clauses ... */
 
 	/* Get the join qual clauses (in plain expression form) */
@@ -2650,6 +2663,8 @@ create_hashjoin_plan(PlannerInfo *root,
 		joinclauses = extract_actual_clauses(joinclauses, false);
 		otherclauses = NIL;
 	}
+
+	filterclauses = extract_actual_clauses(filterclauses, false);
 
 	/*
 	 * Remove the hashclauses from the list of join qual clauses, leaving the
@@ -2720,8 +2735,11 @@ create_hashjoin_plan(PlannerInfo *root,
 
 	/*
 	 * Build the hash node and hash join node.
+	 *
+	 * In HashJoin, filterclauses is needed by Hash, not HashJoin.
 	 */
 	hash_plan = make_hash(inner_plan,
+						  filterclauses,
 						  skewTable,
 						  skewColumn,
 						  skewInherit,
@@ -3862,6 +3880,7 @@ make_bitmap_or(List *bitmapplans)
 static NestLoop *
 make_nestloop(List *tlist,
 			  List *joinclauses,
+			  List *filterclauses,
 			  List *otherclauses,
 			  List *nestParams,
 			  Plan *lefttree,
@@ -3878,6 +3897,7 @@ make_nestloop(List *tlist,
 	plan->righttree = righttree;
 	node->join.jointype = jointype;
 	node->join.joinqual = joinclauses;
+	node->join.filterqual = filterclauses;
 	node->nestParams = nestParams;
 
 	return node;
@@ -3903,12 +3923,15 @@ make_hashjoin(List *tlist,
 	node->hashclauses = hashclauses;
 	node->join.jointype = jointype;
 	node->join.joinqual = joinclauses;
+	/* filterqual is not needed for HashJoin node */
+	node->join.filterqual = NIL;
 
 	return node;
 }
 
 static Hash *
 make_hash(Plan *lefttree,
+		  List *filterclauses,
 		  Oid skewTable,
 		  AttrNumber skewColumn,
 		  bool skewInherit,
@@ -3930,6 +3953,7 @@ make_hash(Plan *lefttree,
 	plan->lefttree = lefttree;
 	plan->righttree = NULL;
 
+	node->filterqual = filterclauses;
 	node->skewTable = skewTable;
 	node->skewColumn = skewColumn;
 	node->skewInherit = skewInherit;
@@ -3942,6 +3966,7 @@ make_hash(Plan *lefttree,
 static MergeJoin *
 make_mergejoin(List *tlist,
 			   List *joinclauses,
+			   List *filterclauses,
 			   List *otherclauses,
 			   List *mergeclauses,
 			   Oid *mergefamilies,
@@ -3967,6 +3992,7 @@ make_mergejoin(List *tlist,
 	node->mergeNullsFirst = mergenullsfirst;
 	node->join.jointype = jointype;
 	node->join.joinqual = joinclauses;
+	node->join.filterqual = filterclauses;
 
 	return node;
 }

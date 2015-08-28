@@ -65,6 +65,7 @@ ExecNestLoop(NestLoopState *node)
 	TupleTableSlot *outerTupleSlot;
 	TupleTableSlot *innerTupleSlot;
 	List	   *joinqual;
+	List	   *filterqual;
 	List	   *otherqual;
 	ExprContext *econtext;
 	ListCell   *lc;
@@ -76,6 +77,7 @@ ExecNestLoop(NestLoopState *node)
 
 	nl = (NestLoop *) node->js.ps.plan;
 	joinqual = node->js.joinqual;
+	filterqual = node->js.filterqual;
 	otherqual = node->js.ps.qual;
 	outerPlan = outerPlanState(node);
 	innerPlan = innerPlanState(node);
@@ -173,6 +175,20 @@ ExecNestLoop(NestLoopState *node)
 
 		innerTupleSlot = ExecProcNode(innerPlan);
 		econtext->ecxt_innertuple = innerTupleSlot;
+
+		/*
+		 * We filter inner tuple with filterqual here.
+		 */
+		if (filterqual == NIL || ExecQual(filterqual, econtext, false))
+		{
+			/* Nothing to do. No-op */
+		}
+		else
+		{
+			/* Filtered. */
+			InstrCountFiltered2(node, 1);
+			continue;
+		}
 
 		if (TupIsNull(innerTupleSlot))
 		{
@@ -329,6 +345,9 @@ ExecInitNestLoop(NestLoop *node, EState *estate, int eflags)
 	nlstate->js.jointype = node->join.jointype;
 	nlstate->js.joinqual = (List *)
 		ExecInitExpr((Expr *) node->join.joinqual,
+					 (PlanState *) nlstate);
+	nlstate->js.filterqual = (List *)
+		ExecInitExpr((Expr *) node->join.filterqual,
 					 (PlanState *) nlstate);
 
 	/*

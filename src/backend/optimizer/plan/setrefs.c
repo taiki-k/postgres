@@ -104,6 +104,7 @@ static Node *fix_scan_expr_mutator(Node *node, fix_scan_expr_context *context);
 static bool fix_scan_expr_walker(Node *node, fix_scan_expr_context *context);
 static void set_join_references(PlannerInfo *root, Join *join, int rtoffset);
 static void set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset);
+static void set_hash_references(PlannerInfo *root, Hash *hash, int rtoffset);
 static void set_dummy_tlist_references(Plan *plan, int rtoffset);
 static indexed_tlist *build_tlist_index(List *tlist);
 static Var *search_indexed_tlist_for_var(Var *var,
@@ -598,6 +599,12 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 			break;
 
 		case T_Hash:
+			/*
+			 * For Hash node, we need to set INNER_VAR to varno of filterqual.
+			 */
+			set_hash_references(root, (Hash *) plan, rtoffset);
+			/* FALL THRU */
+
 		case T_Material:
 		case T_Sort:
 		case T_Unique:
@@ -1493,6 +1500,14 @@ set_join_references(PlannerInfo *root, Join *join, int rtoffset)
 								   (Index) 0,
 								   rtoffset);
 
+	/* We need not to do for HashJoin */
+	if (!IsA(join, HashJoin) || join->filterqual != NIL)
+		join->filterqual = fix_upper_expr(root,
+										  (Node *) join->filterqual,
+										  inner_itlist,
+										  INNER_VAR,
+										  rtoffset);
+
 	/* Now do join-type-specific stuff */
 	if (IsA(join, NestLoop))
 	{
@@ -1651,6 +1666,25 @@ set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset)
 					   subplan_itlist,
 					   OUTER_VAR,
 					   rtoffset);
+
+	pfree(subplan_itlist);
+}
+
+static void
+set_hash_references(PlannerInfo *root, Hash *hash, int rtoffset)
+{
+	Plan	   *subplan = hash->plan.lefttree;
+	indexed_tlist *subplan_itlist;
+	List	   *output_targetlist;
+	ListCell   *l;
+
+	subplan_itlist = build_tlist_index(subplan->targetlist);
+
+	fix_upper_expr(root,
+				   (Node *) hash->filterqual,
+				   subplan_itlist,
+				   OUTER_VAR, /* XXX it may be INNER_VAR ? */
+				   rtoffset);
 
 	pfree(subplan_itlist);
 }

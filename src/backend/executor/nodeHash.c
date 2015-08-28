@@ -75,6 +75,7 @@ MultiExecHash(HashState *node)
 {
 	PlanState  *outerNode;
 	List	   *hashkeys;
+	List	   *filterqual;
 	HashJoinTable hashtable;
 	TupleTableSlot *slot;
 	ExprContext *econtext;
@@ -95,6 +96,7 @@ MultiExecHash(HashState *node)
 	 */
 	hashkeys = node->hashkeys;
 	econtext = node->ps.ps_ExprContext;
+	filterqual = node->filterqual;
 
 	/*
 	 * get all inner tuples and insert into the hash table (or temp files)
@@ -106,6 +108,21 @@ MultiExecHash(HashState *node)
 			break;
 		/* We have to compute the hash value */
 		econtext->ecxt_innertuple = slot;
+
+		/*
+		 * Now, we filter with filterqual.
+		 */
+		if (filterqual == NIL || ExecQual(filterqual, econtext, false))
+		{
+			/* Nothing to do. No-op */
+		}
+		else
+		{
+			/* filterqual is neither scanqual nor joinqual. */
+			InstrCountFiltered2(node, 1);
+			continue;
+		}
+
 		if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
 								 false, hashtable->keepNulls,
 								 &hashvalue))
@@ -206,6 +223,9 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	hashstate->ps.qual = (List *)
 		ExecInitExpr((Expr *) node->plan.qual,
 					 (PlanState *) hashstate);
+	hashstate->filterqual = (List *)
+		ExecInitExpr((Expr *) node->filterqual,
+					  (PlanState *) hashstate);
 
 	/*
 	 * initialize child nodes

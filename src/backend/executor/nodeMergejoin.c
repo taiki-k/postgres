@@ -355,6 +355,22 @@ MJEvalInnerValues(MergeJoinState *mergestate, TupleTableSlot *innerslot)
 
 	econtext->ecxt_innertuple = innerslot;
 
+	/*
+	 * We filter inner tuple with filterqual here.
+	 */
+	if (mergestate->js.filterqual == NIL ||
+			ExecQual(mergestate->js.filterqual, econtext, false))
+	{
+		/* Nothing to do. No-op */
+	}
+	else
+	{
+		/* Filtered. */
+		MemoryContextSwitchTo(oldContext);
+		InstrCountFiltered2(mergestate, 1);
+		return MJEVAL_NONMATCHABLE;
+	}
+
 	for (i = 0; i < mergestate->mj_NumClauses; i++)
 	{
 		MergeJoinClause clause = &mergestate->mj_Clauses[i];
@@ -1513,6 +1529,9 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	mergestate->js.jointype = node->join.jointype;
 	mergestate->js.joinqual = (List *)
 		ExecInitExpr((Expr *) node->join.joinqual,
+					 (PlanState *) mergestate);
+	mergestate->js.filterqual = (List *)
+		ExecInitExpr((Expr *) node->join.filterqual,
 					 (PlanState *) mergestate);
 	mergestate->mj_ConstFalseJoin = false;
 	/* mergeclauses are handled below */
