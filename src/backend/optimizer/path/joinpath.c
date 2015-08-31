@@ -1671,7 +1671,7 @@ try_join_pushdown(PlannerInfo *root,
 		RelOptInfo	*old_outer_rel = ((Path *) lfirst(lc))->parent;
 		RelOptInfo	*new_outer_rel;
 		List		*new_joinclauses;
-		List		*added_restrictlist = NIL;
+		List		*added_restrictlist;
 		List		**join_rel_level;
 
 		Assert(!IS_DUMMY_REL(old_outer_rel));
@@ -1687,12 +1687,8 @@ try_join_pushdown(PlannerInfo *root,
 		 * Make RestrictInfo list from CHECK() constraints of outer table.
 		 */
 		added_restrictlist =
-				lappend(added_restrictlist,
-						make_restrictinfos_from_check_constr(
-											root,
-											new_joinclauses,
-											old_outer_rel));
-
+				make_restrictinfos_from_check_constr(root, new_joinclauses,
+													old_outer_rel);
 
 		/* XXX This is workaround for failing assertion at allpaths.c */
 		join_rel_level = root->join_rel_level;
