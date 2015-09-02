@@ -528,21 +528,70 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 		baserel = find_base_rel(root, var->varno);
 		ndx = var->varattno - baserel->min_attr;
 
+		/*
+		 * We must handle case of join pushdown.
+		 */
 		if (input_rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
 		{
 			/* Get the Var's PARENT base rel */
 			Index	parent_relid =
 						find_childrel_appendrelinfo(root, input_rel)->parent_relid;
 			RelOptInfo *parent_rel = find_base_rel(root, parent_relid);
-			Var		*parent_var = (Var *) list_nth(parent_rel->reltargetlist, nth);
+			Var		*parent_var =
+						(Var *) list_nth(parent_rel->reltargetlist, nth);
 			int		parent_ndx = parent_var->varattno - parent_rel->min_attr;
+			/* Relids have included parent_rel's instead of input_rel's. */
+			Relids	relids_tmp =
+					bms_del_members(bms_copy(relids), input_rel->relids);
+
+			relids_tmp = bms_union(relids_tmp, parent_rel->relids);
 
 			Assert(ndx == parent_ndx);
-			is_needed = (bms_nonempty_difference(parent_rel->attr_needed[parent_ndx], relids));
+			is_needed =
+					(bms_nonempty_difference(
+							parent_rel->attr_needed[parent_ndx],
+							relids_tmp));
+
+			bms_free(relids_tmp);
 		}
 		else
 		{
-			is_needed = (bms_nonempty_difference(baserel->attr_needed[ndx], relids));
+			Relids	relids_tmp =
+					bms_del_members(bms_copy(relids), input_rel->relids);
+			Index	another_relid = -1;
+
+			/* Try to detect Inner relation of pushed-down join. */
+			if (bms_get_singleton_member(relids_tmp, &another_relid))
+			{
+				RelOptInfo	*another_rel =
+						find_base_rel(root, another_relid);
+
+				if (another_rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
+				{
+					/* This may be inner relation of pushed-down join. */
+					Index	parent_relid =
+								find_childrel_appendrelinfo(root, another_rel)->parent_relid;
+					RelOptInfo *parent_rel = find_base_rel(root, parent_relid);
+
+					bms_free(relids_tmp);
+					relids_tmp =
+							bms_union(input_rel->relids, parent_rel->relids);
+				}
+			}
+
+			if (!bms_is_subset(input_rel->relids, relids_tmp))
+			{
+				/* Can't detect inner relation of pushed-down join */
+				bms_free(relids_tmp);
+				relids_tmp = bms_copy(relids);
+			}
+
+			is_needed =
+					(bms_nonempty_difference(
+							baserel->attr_needed[ndx],
+							relids_tmp));
+
+			bms_free(relids_tmp);
 		}
 
 		/* Is it still needed above this joinrel? */
