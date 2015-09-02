@@ -496,19 +496,24 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 {
 	Relids		relids = joinrel->relids;
 	ListCell   *vars;
+	int			nth = 0;
 
 	foreach(vars, input_rel->reltargetlist)
 	{
 		Var		   *var = (Var *) lfirst(vars);
 		RelOptInfo *baserel;
 		int			ndx;
+		bool		is_needed = false;
 
 		/*
 		 * Ignore PlaceHolderVars in the input tlists; we'll make our own
 		 * decisions about whether to copy them.
 		 */
 		if (IsA(var, PlaceHolderVar))
+		{
+			nth++;
 			continue;
+		}
 
 		/*
 		 * Otherwise, anything in a baserel or joinrel targetlist ought to be
@@ -521,15 +526,34 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 
 		/* Get the Var's original base rel */
 		baserel = find_base_rel(root, var->varno);
+		ndx = var->varattno - baserel->min_attr;
+
+		if (input_rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
+		{
+			/* Get the Var's PARENT base rel */
+			Index	parent_relid =
+						find_childrel_appendrelinfo(root, input_rel)->parent_relid;
+			RelOptInfo *parent_rel = find_base_rel(root, parent_relid);
+			Var		*parent_var = (Var *) list_nth(parent_rel->reltargetlist, nth);
+			int		parent_ndx = parent_var->varattno - parent_rel->min_attr;
+
+			Assert(ndx == parent_ndx);
+			is_needed = (bms_nonempty_difference(parent_rel->attr_needed[parent_ndx], relids));
+		}
+		else
+		{
+			is_needed = (bms_nonempty_difference(baserel->attr_needed[ndx], relids));
+		}
 
 		/* Is it still needed above this joinrel? */
-		ndx = var->varattno - baserel->min_attr;
-		if (bms_nonempty_difference(baserel->attr_needed[ndx], relids))
+		if (is_needed)
 		{
 			/* Yup, add it to the output */
 			joinrel->reltargetlist = lappend(joinrel->reltargetlist, var);
 			joinrel->width += baserel->attr_widths[ndx];
 		}
+
+		nth++;
 	}
 }
 

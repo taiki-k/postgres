@@ -106,8 +106,12 @@ MultiExecHash(HashState *node)
 		slot = ExecProcNode(outerNode);
 		if (TupIsNull(slot))
 			break;
-		/* We have to compute the hash value */
-		econtext->ecxt_innertuple = slot;
+
+		/*
+		 * Sub node is connected to this node as "OUTER",
+		 * so we temporary specify slot as outer tuple during ExecQual.
+		 */
+		econtext->ecxt_outertuple = slot;
 
 		/*
 		 * Now, we filter with filterqual.
@@ -122,6 +126,10 @@ MultiExecHash(HashState *node)
 			InstrCountFiltered2(node, 1);
 			continue;
 		}
+
+		/* We have to compute the hash value */
+		econtext->ecxt_innertuple = slot;
+		econtext->ecxt_outertuple = NULL;
 
 		if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
 								 false, hashtable->keepNulls,

@@ -1427,9 +1427,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (((NestLoop *) plan)->join.joinqual)
 				show_instrumentation_count("Rows Removed by Join Filter", 1,
 										   planstate, es);
-			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
-			if (plan->qual)
-				show_instrumentation_count("Rows Removed by Filter", 2,
+			show_upper_qual(plan->qual, "Other Filter", planstate, ancestors, es);
+			show_upper_qual(((NestLoop *) plan)->join.filterqual,
+							"Inner Filter", planstate, ancestors, es);
+			if (plan->qual || ((NestLoop *) plan)->join.filterqual)
+				show_instrumentation_count("Rows Removed by Inner/Other Filter", 2,
 										   planstate, es);
 			break;
 		case T_MergeJoin:
@@ -1440,9 +1442,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (((MergeJoin *) plan)->join.joinqual)
 				show_instrumentation_count("Rows Removed by Join Filter", 1,
 										   planstate, es);
-			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
-			if (plan->qual)
-				show_instrumentation_count("Rows Removed by Filter", 2,
+			show_upper_qual(plan->qual, "Other Filter", planstate, ancestors, es);
+			show_upper_qual(((MergeJoin *) plan)->join.filterqual,
+							"Inner Filter", planstate, ancestors, es);
+			if (plan->qual || ((MergeJoin *) plan)->join.filterqual)
+				show_instrumentation_count("Rows Removed by Inner/Other Filters", 2,
 										   planstate, es);
 			break;
 		case T_HashJoin:
@@ -1453,9 +1457,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (((HashJoin *) plan)->join.joinqual)
 				show_instrumentation_count("Rows Removed by Join Filter", 1,
 										   planstate, es);
-			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
+			show_upper_qual(plan->qual, "Other Filter", planstate, ancestors, es);
 			if (plan->qual)
-				show_instrumentation_count("Rows Removed by Filter", 2,
+				show_instrumentation_count("Rows Removed by Other Filter", 2,
 										   planstate, es);
 			break;
 		case T_Agg:
@@ -1494,6 +1498,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_Hash:
 			show_hash_info((HashState *) planstate, es);
+			show_upper_qual(((Hash *) plan)->filterqual, "Inner Filter",
+							planstate, ancestors, es);
+			if (((Hash *) plan)->filterqual)
+				show_instrumentation_count("Rows Removed by Inner Filter", 2,
+										   planstate, es);
 			break;
 		default:
 			break;

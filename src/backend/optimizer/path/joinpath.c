@@ -94,7 +94,8 @@ add_paths_to_joinrel(PlannerInfo *root,
 					 JoinType jointype,
 					 SpecialJoinInfo *sjinfo,
 					 List *restrictlist,
-					 List *added_restrictlist)
+					 List *added_restrictlist,
+					 bool  added_rinfo_for_outer)
 {
 	JoinPathExtraData extra;
 	bool		mergejoin_allowed = true;
@@ -108,8 +109,17 @@ add_paths_to_joinrel(PlannerInfo *root,
 		try_join_pushdown(root, joinrel, outerrel, innerrel, restrictlist);
 	}
 
-	extra.restrictlist = restrictlist;
-	extra.added_restrictlist = added_restrictlist;
+	if (added_restrictlist != NIL && added_rinfo_for_outer)
+	{
+		extra.restrictlist =
+				list_concat(list_copy(restrictlist), added_restrictlist);
+		extra.added_restrictlist = NIL;
+	}
+	else
+	{
+		extra.restrictlist = restrictlist;
+		extra.added_restrictlist = added_restrictlist;
+	}
 	extra.mergeclause_list = NIL;
 	extra.sjinfo = sjinfo;
 	extra.param_source_rels = NULL;

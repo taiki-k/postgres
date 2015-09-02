@@ -87,7 +87,8 @@ extern void create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel);
 extern void add_paths_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
 					 RelOptInfo *outerrel, RelOptInfo *innerrel,
 					 JoinType jointype, SpecialJoinInfo *sjinfo,
-					 List *restrictlist, List *added_restrictlist);
+					 List *restrictlist, List *added_restrictlist,
+					 bool added_rinfo_for_outer);
 
 /*
  * joinrels.c

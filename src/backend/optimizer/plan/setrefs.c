@@ -1680,11 +1680,16 @@ set_hash_references(PlannerInfo *root, Hash *hash, int rtoffset)
 
 	subplan_itlist = build_tlist_index(subplan->targetlist);
 
-	fix_upper_expr(root,
-				   (Node *) hash->filterqual,
-				   subplan_itlist,
-				   OUTER_VAR, /* XXX it may be INNER_VAR ? */
-				   rtoffset);
+	/*
+	 * Sub plan node is connected to this plan node as "OUTER",
+	 * so we specify OUTER_VAR instead of INNER_VAR.
+	 */
+	hash->filterqual =
+		(List *) fix_upper_expr(root,
+								(Node *) hash->filterqual,
+								subplan_itlist,
+								OUTER_VAR,
+								rtoffset);
 
 	pfree(subplan_itlist);
 }

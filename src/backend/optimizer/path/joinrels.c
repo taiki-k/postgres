@@ -692,11 +692,13 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_INNER, sjinfo,
 								 restrictlist,
-								 added_restrictlist);
+								 added_restrictlist,
+								 false);
 			add_paths_to_joinrel(root, joinrel, rel2, rel1,
 								 JOIN_INNER, sjinfo,
 								 restrictlist,
-								 added_restrictlist);
+								 added_restrictlist,
+								 true);
 			break;
 		case JOIN_LEFT:
 			if (is_dummy_rel(rel1) ||
@@ -711,11 +713,13 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_LEFT, sjinfo,
 								 restrictlist,
-								 added_restrictlist);
+								 added_restrictlist,
+								 false);
 			add_paths_to_joinrel(root, joinrel, rel2, rel1,
 								 JOIN_RIGHT, sjinfo,
 								 restrictlist,
-								 added_restrictlist);
+								 added_restrictlist,
+								 true);
 			break;
 		case JOIN_FULL:
 			if ((is_dummy_rel(rel1) && is_dummy_rel(rel2)) ||
@@ -727,11 +731,13 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_FULL, sjinfo,
 								 restrictlist,
-								 added_restrictlist);
+								 added_restrictlist,
+								 false);
 			add_paths_to_joinrel(root, joinrel, rel2, rel1,
 								 JOIN_FULL, sjinfo,
 								 restrictlist,
-								 added_restrictlist);
+								 added_restrictlist,
+								 true);
 
 			/*
 			 * If there are join quals that aren't mergeable or hashable, we
@@ -765,7 +771,8 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 				add_paths_to_joinrel(root, joinrel, rel1, rel2,
 									 JOIN_SEMI, sjinfo,
 									 restrictlist,
-									 added_restrictlist);
+									 added_restrictlist,
+									 false);
 			}
 
 			/*
@@ -789,11 +796,13 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 				add_paths_to_joinrel(root, joinrel, rel1, rel2,
 									 JOIN_UNIQUE_INNER, sjinfo,
 									 restrictlist,
-									 added_restrictlist);
+									 added_restrictlist,
+									 false);
 				add_paths_to_joinrel(root, joinrel, rel2, rel1,
 									 JOIN_UNIQUE_OUTER, sjinfo,
 									 restrictlist,
-									 added_restrictlist);
+									 added_restrictlist,
+									 true);
 			}
 			break;
 		case JOIN_ANTI:
@@ -809,7 +818,8 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_ANTI, sjinfo,
 								 restrictlist,
-								 added_restrictlist);
+								 added_restrictlist,
+								 false);
 			break;
 		default:
 			/* other values not expected here */
