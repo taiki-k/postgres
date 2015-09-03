@@ -2664,8 +2664,6 @@ create_hashjoin_plan(PlannerInfo *root,
 		otherclauses = NIL;
 	}
 
-	filterclauses = extract_actual_clauses(filterclauses, false);
-
 	/*
 	 * Remove the hashclauses from the list of join qual clauses, leaving the
 	 * list of quals that must be checked as qpquals.
@@ -3942,6 +3940,27 @@ make_hash(Plan *lefttree,
 	Plan	   *plan = &node->plan;
 
 	copy_plan_costsize(plan, lefttree);
+	/*
+	 * estimate nrows of 'lefttree' rel filtered by 'filterclauses'.
+	 * All selectivity values maybe cached, because clauselist_selectivity()
+	 * had already been called at this timing.
+	 * Thus, clauselist_selectivity() need not to specify real PlannerInfo here.
+	 */
+	if (filterclauses != NIL)
+	{
+#ifdef USE_ASSERT_CHECKING
+		ListCell *lc;
+
+		foreach (lc, filterclauses)
+		{
+			Assert(IsA(lfirst(lc), RestrictInfo));
+			Assert(((RestrictInfo *)lfirst(lc))->norm_selec != -1);
+		}
+#endif
+		plan->plan_rows *=
+				clauselist_selectivity(NULL, filterclauses, 0, JOIN_INNER, NULL);
+		plan->plan_rows = clamp_row_est(plan->plan_rows);
+	}
 
 	/*
 	 * For plausibility, make startup & total costs equal total cost of input
@@ -3953,7 +3972,7 @@ make_hash(Plan *lefttree,
 	plan->lefttree = lefttree;
 	plan->righttree = NULL;
 
-	node->filterqual = filterclauses;
+	node->filterqual = extract_actual_clauses(filterclauses, false);
 	node->skewTable = skewTable;
 	node->skewColumn = skewColumn;
 	node->skewInherit = skewInherit;

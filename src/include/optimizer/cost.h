@@ -137,6 +137,7 @@ extern void initial_cost_hashjoin(PlannerInfo *root,
 					  JoinCostWorkspace *workspace,
 					  JoinType jointype,
 					  List *hashclauses,
+					  List *added_restrictlist,
 					  Path *outer_path, Path *inner_path,
 					  SpecialJoinInfo *sjinfo,
 					  SemiAntiJoinFactors *semifactors);

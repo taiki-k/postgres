@@ -301,7 +301,7 @@ ExecHashTableCreate(Hash *node, List *hashOperators, bool keepNulls)
 	 */
 	outerNode = outerPlan(node);
 
-	ExecChooseHashTableSize(outerNode->plan_rows, outerNode->plan_width,
+	ExecChooseHashTableSize(node->plan.plan_rows, outerNode->plan_width,
 							OidIsValid(node->skewTable),
 							&nbuckets, &nbatch, &num_skew_mcvs);
 

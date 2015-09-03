@@ -32,6 +32,7 @@
 typedef struct
 {
 	List	*joininfo;
+	bool	 is_mutated;
 } check_constraint_mutator_context;
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
@@ -593,6 +594,7 @@ try_hashjoin_path(PlannerInfo *root,
 	 * never have any output pathkeys, per comments in create_hashjoin_path.
 	 */
 	initial_cost_hashjoin(root, &workspace, jointype, hashclauses,
+						  extra->added_restrictlist,
 						  outer_path, inner_path,
 						  extra->sjinfo, &extra->semifactors);
 
@@ -1518,6 +1520,10 @@ select_mergejoin_clauses(PlannerInfo *root,
 static Node *
 check_constraint_mutator(Node *node, check_constraint_mutator_context *context)
 {
+	/* Failed to mutate. Abort. */
+	if (!context->is_mutated)
+		return (Node *) copyObject(node);
+
 	if (node == NULL)
 		return NULL;
 
@@ -1558,6 +1564,8 @@ check_constraint_mutator(Node *node, check_constraint_mutator_context *context)
 			}
 		}
 
+		/* Unfortunately, mutating is failed. */
+		context->is_mutated = false;
 		return (Node *) copyObject(node);
 	}
 
@@ -1581,16 +1589,20 @@ make_restrictinfos_from_check_constr(PlannerInfo *root,
 	check_constraint_mutator_context	context;
 
 	context.joininfo = joininfo;
+	context.is_mutated = true;
 
 	/*
 	 * Try to change CHECK() constraints to filter expressions.
 	 */
 	foreach(lc, check_constr)
 	{
-		result = lappend(result,
-						expression_tree_mutator((Node *) lfirst(lc),
-												check_constraint_mutator,
-												(void *) &context));
+		Node *mutated =
+				expression_tree_mutator((Node *) lfirst(lc),
+										check_constraint_mutator,
+										(void *) &context);
+
+		if (context.is_mutated)
+			result = lappend(result, mutated);
 	}
 
 	Assert(list_length(check_constr) == list_length(result));

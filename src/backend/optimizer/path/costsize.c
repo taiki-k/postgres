@@ -1995,6 +1995,7 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
 
 	/* CPU costs */
 	cost_qual_eval(&restrict_qual_cost, path->joinrestrictinfo, root);
+	cost_qual_eval(&restrict_qual_cost, path->filterrestrictinfo, root);
 	startup_cost += restrict_qual_cost.startup;
 	cpu_per_tuple = cpu_tuple_cost + restrict_qual_cost.per_tuple;
 	run_cost += cpu_per_tuple * ntuples;
@@ -2306,6 +2307,7 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 	 */
 	cost_qual_eval(&merge_qual_cost, mergeclauses, root);
 	cost_qual_eval(&qp_qual_cost, path->jpath.joinrestrictinfo, root);
+	cost_qual_eval(&qp_qual_cost, path->jpath.filterrestrictinfo, root);
 	qp_qual_cost.startup -= merge_qual_cost.startup;
 	qp_qual_cost.per_tuple -= merge_qual_cost.per_tuple;
 
@@ -2547,6 +2549,7 @@ void
 initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 					  JoinType jointype,
 					  List *hashclauses,
+					  List *added_restrictinfo,
 					  Path *outer_path, Path *inner_path,
 					  SpecialJoinInfo *sjinfo,
 					  SemiAntiJoinFactors *semifactors)
@@ -2564,6 +2567,18 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	startup_cost += outer_path->startup_cost;
 	run_cost += outer_path->total_cost - outer_path->startup_cost;
 	startup_cost += inner_path->total_cost;
+
+	/* estimate nrows of inner_path filtered by added_restrictlist */
+	if (added_restrictinfo != NIL)
+	{
+		inner_path_rows *=
+				clauselist_selectivity(root,
+									   added_restrictinfo,
+									   0,
+									   JOIN_INNER,
+									   NULL);
+		inner_path_rows = clamp_row_est(inner_path_rows);
+	}
 
 	/*
 	 * Cost of computing hash function: must do it once per input tuple. We
@@ -2655,6 +2670,7 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	Cost		cpu_per_tuple;
 	QualCost	hash_qual_cost;
 	QualCost	qp_qual_cost;
+	QualCost	filter_qual_cost;
 	double		hashjointuples;
 	double		virtualbuckets;
 	Selectivity innerbucketsize;
@@ -2673,6 +2689,18 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	 */
 	if (!enable_hashjoin)
 		startup_cost += disable_cost;
+
+	/* estimate nrows of inner_path filtered by filter restrict info */
+	if (path->jpath.filterrestrictinfo != NIL)
+	{
+		inner_path_rows *=
+				clauselist_selectivity(root,
+									   path->jpath.filterrestrictinfo,
+									   0,
+									   JOIN_INNER,
+									   NULL);
+		inner_path_rows = clamp_row_est(inner_path_rows);
+	}
 
 	/* mark the path with estimated # of batches */
 	path->num_batches = numbatches;
@@ -2753,6 +2781,7 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	 */
 	cost_qual_eval(&hash_qual_cost, hashclauses, root);
 	cost_qual_eval(&qp_qual_cost, path->jpath.joinrestrictinfo, root);
+	cost_qual_eval(&filter_qual_cost, path->jpath.filterrestrictinfo, root);
 	qp_qual_cost.startup -= hash_qual_cost.startup;
 	qp_qual_cost.per_tuple -= hash_qual_cost.per_tuple;
 
@@ -2835,6 +2864,8 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	 * not all of the quals may get evaluated at each tuple.)
 	 */
 	startup_cost += qp_qual_cost.startup;
+	startup_cost += filter_qual_cost.startup +
+			filter_qual_cost.per_tuple * inner_path_rows;
 	cpu_per_tuple = cpu_tuple_cost + qp_qual_cost.per_tuple;
 	run_cost += cpu_per_tuple * hashjointuples;
 
