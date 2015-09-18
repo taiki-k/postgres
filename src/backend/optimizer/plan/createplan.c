@@ -4056,6 +4056,21 @@ make_sort(PlannerInfo *root, Plan *lefttree, int numCols,
 	return node;
 }
 
+static inline bool
+should_ignore_ec_member(EquivalenceMember *em, Relids relids)
+{
+	/*
+	 * If this is called from make_sort_from_pathkeys, relids may be NULL.
+	 * In this case, we must not ignore child members because inner/outer plan
+	 * of pushed-down merge join is always child table.
+	 */
+	if (!relids)
+		return false;
+
+	return (em->em_is_child &&
+		!bms_equal(em->em_relids, relids));
+}
+
 /*
  * prepare_sort_from_pathkeys
  *	  Prepare to sort according to given pathkeys
@@ -4235,8 +4250,7 @@ prepare_sort_from_pathkeys(PlannerInfo *root, Plan *lefttree, List *pathkeys,
 				 * Ignore child members unless they match the rel being
 				 * sorted.
 				 */
-				if (em->em_is_child &&
-					!bms_equal(em->em_relids, relids))
+				if (should_ignore_ec_member(em, relids))
 					continue;
 
 				sortexpr = em->em_expr;
@@ -4349,8 +4363,7 @@ find_ec_member_for_tle(EquivalenceClass *ec,
 		/*
 		 * Ignore child members unless they match the rel being sorted.
 		 */
-		if (em->em_is_child &&
-			!bms_equal(em->em_relids, relids))
+		if (should_ignore_ec_member(em, relids))
 			continue;
 
 		/* Match if same expression (after stripping relabel) */
