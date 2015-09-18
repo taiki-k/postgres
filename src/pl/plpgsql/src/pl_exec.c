@@ -42,8 +42,6 @@
 #include "utils/typcache.h"
 
 
-static const char *const raise_skip_msg = "RAISE";
-
 typedef struct
 {
 	int			nargs;			/* number of arguments */
@@ -232,7 +230,8 @@ static Datum exec_eval_expr(PLpgSQL_execstate *estate,
 			   Oid *rettype,
 			   int32 *rettypmod);
 static int exec_run_select(PLpgSQL_execstate *estate,
-				PLpgSQL_expr *expr, long maxtuples, Portal *portalP);
+				PLpgSQL_expr *expr, long maxtuples, Portal *portalP,
+				bool parallelOK);
 static int exec_for_query(PLpgSQL_execstate *estate, PLpgSQL_stmt_forq *stmt,
 			   Portal portal, bool prefetch_ok);
 static ParamListInfo setup_param_list(PLpgSQL_execstate *estate,
@@ -933,10 +932,6 @@ plpgsql_exec_error_callback(void *arg)
 {
 	PLpgSQL_execstate *estate = (PLpgSQL_execstate *) arg;
 
-	/* if we are doing RAISE, don't report its location */
-	if (estate->err_text == raise_skip_msg)
-		return;
-
 	if (estate->err_text != NULL)
 	{
 		/*
@@ -1569,7 +1564,7 @@ exec_stmt_perform(PLpgSQL_execstate *estate, PLpgSQL_stmt_perform *stmt)
 {
 	PLpgSQL_expr *expr = stmt->expr;
 
-	(void) exec_run_select(estate, expr, 0, NULL);
+	(void) exec_run_select(estate, expr, 0, NULL, true);
 	exec_set_found(estate, (estate->eval_processed != 0));
 	exec_eval_cleanup(estate);
 
@@ -2113,7 +2108,7 @@ exec_stmt_fors(PLpgSQL_execstate *estate, PLpgSQL_stmt_fors *stmt)
 	/*
 	 * Open the implicit cursor for the statement using exec_run_select
 	 */
-	exec_run_select(estate, stmt->query, 0, &portal);
+	exec_run_select(estate, stmt->query, 0, &portal, false);
 
 	/*
 	 * Execute the loop
@@ -2875,14 +2870,15 @@ exec_stmt_return_query(PLpgSQL_execstate *estate,
 	if (stmt->query != NULL)
 	{
 		/* static query */
-		exec_run_select(estate, stmt->query, 0, &portal);
+		exec_run_select(estate, stmt->query, 0, &portal, true);
 	}
 	else
 	{
 		/* RETURN QUERY EXECUTE */
 		Assert(stmt->dynquery != NULL);
 		portal = exec_dynquery_with_params(estate, stmt->dynquery,
-										   stmt->params, NULL, 0);
+										   stmt->params, NULL,
+										   CURSOR_OPT_PARALLEL_OK);
 	}
 
 	tupmap = convert_tuples_by_position(portal->tupDesc,
@@ -3152,8 +3148,6 @@ exec_stmt_raise(PLpgSQL_execstate *estate, PLpgSQL_stmt_raise *stmt)
 	/*
 	 * Throw the error (may or may not come back)
 	 */
-	estate->err_text = raise_skip_msg;	/* suppress traceback of raise */
-
 	ereport(stmt->elog_level,
 			(err_code ? errcode(err_code) : 0,
 			 errmsg_internal("%s", err_message),
@@ -3169,8 +3163,6 @@ exec_stmt_raise(PLpgSQL_execstate *estate, PLpgSQL_stmt_raise *stmt)
 			 err_generic_string(PG_DIAG_TABLE_NAME, err_table) : 0,
 			 (err_schema != NULL) ?
 			 err_generic_string(PG_DIAG_SCHEMA_NAME, err_schema) : 0));
-
-	estate->err_text = NULL;	/* un-suppress... */
 
 	if (condname != NULL)
 		pfree(condname);
@@ -5029,7 +5021,7 @@ exec_eval_expr(PLpgSQL_execstate *estate,
 	/*
 	 * Else do it the hard way via exec_run_select
 	 */
-	rc = exec_run_select(estate, expr, 2, NULL);
+	rc = exec_run_select(estate, expr, 2, NULL, false);
 	if (rc != SPI_OK_SELECT)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -5085,7 +5077,8 @@ exec_eval_expr(PLpgSQL_execstate *estate,
  */
 static int
 exec_run_select(PLpgSQL_execstate *estate,
-				PLpgSQL_expr *expr, long maxtuples, Portal *portalP)
+				PLpgSQL_expr *expr, long maxtuples, Portal *portalP,
+				bool parallelOK)
 {
 	ParamListInfo paramLI;
 	int			rc;
@@ -5094,7 +5087,8 @@ exec_run_select(PLpgSQL_execstate *estate,
 	 * On the first call for this expression generate the plan
 	 */
 	if (expr->plan == NULL)
-		exec_prepare_plan(estate, expr, 0);
+		exec_prepare_plan(estate, expr, parallelOK ?
+			CURSOR_OPT_PARALLEL_OK : 0);
 
 	/*
 	 * If a portal was requested, put the query into the portal

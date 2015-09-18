@@ -568,21 +568,26 @@ makesearch(struct vars * v,
 	 * splitting each such state into progress and no-progress states.
 	 */
 
-	/* first, make a list of the states */
+	/* first, make a list of the states reachable from pre and elsewhere */
 	slist = NULL;
 	for (a = pre->outs; a != NULL; a = a->outchain)
 	{
 		s = a->to;
 		for (b = s->ins; b != NULL; b = b->inchain)
+		{
 			if (b->from != pre)
 				break;
+		}
+
+		/*
+		 * We want to mark states as being in the list already by having non
+		 * NULL tmp fields, but we can't just store the old slist value in tmp
+		 * because that doesn't work for the first such state.  Instead, the
+		 * first list entry gets its own address in tmp.
+		 */
 		if (b != NULL && s->tmp == NULL)
 		{
-			/*
-			 * Must be split if not already in the list (fixes bugs 505048,
-			 * 230589, 840258, 504785).
-			 */
-			s->tmp = slist;
+			s->tmp = (slist != NULL) ? slist : s;
 			slist = s;
 		}
 	}
@@ -601,7 +606,7 @@ makesearch(struct vars * v,
 				freearc(nfa, a);
 			}
 		}
-		s2 = s->tmp;
+		s2 = (s->tmp != s) ? s->tmp : NULL;
 		s->tmp = NULL;			/* clean up while we're at it */
 	}
 }
@@ -955,13 +960,13 @@ parseqatom(struct vars * v,
 	{
 		case '*':
 			m = 0;
-			n = INFINITY;
+			n = DUPINF;
 			qprefer = (v->nextvalue) ? LONGER : SHORTER;
 			NEXT();
 			break;
 		case '+':
 			m = 1;
-			n = INFINITY;
+			n = DUPINF;
 			qprefer = (v->nextvalue) ? LONGER : SHORTER;
 			NEXT();
 			break;
@@ -979,7 +984,7 @@ parseqatom(struct vars * v,
 				if (SEE(DIGIT))
 					n = scannum(v);
 				else
-					n = INFINITY;
+					n = DUPINF;
 				if (m > n)
 				{
 					ERR(REG_BADBR);
@@ -1141,8 +1146,8 @@ parseqatom(struct vars * v,
 		 * really care where its submatches are.
 		 */
 		dupnfa(v->nfa, atom->begin, atom->end, s, atom->begin);
-		assert(m >= 1 && m != INFINITY && n >= 1);
-		repeat(v, s, atom->begin, m - 1, (n == INFINITY) ? n : n - 1);
+		assert(m >= 1 && m != DUPINF && n >= 1);
+		repeat(v, s, atom->begin, m - 1, (n == DUPINF) ? n : n - 1);
 		f = COMBINE(qprefer, atom->flags);
 		t = subre(v, '.', f, s, atom->end);		/* prefix and atom */
 		NOERR();
@@ -1263,7 +1268,7 @@ repeat(struct vars * v,
 #define  SOME	 2
 #define  INF	 3
 #define  PAIR(x, y)  ((x)*4 + (y))
-#define  REDUCE(x)	 ( ((x) == INFINITY) ? INF : (((x) > 1) ? SOME : (x)) )
+#define  REDUCE(x)	 ( ((x) == DUPINF) ? INF : (((x) > 1) ? SOME : (x)) )
 	const int	rm = REDUCE(m);
 	const int	rn = REDUCE(n);
 	struct state *s;
@@ -2021,7 +2026,7 @@ stdump(struct subre * t,
 	if (t->min != 1 || t->max != 1)
 	{
 		fprintf(f, " {%d,", t->min);
-		if (t->max != INFINITY)
+		if (t->max != DUPINF)
 			fprintf(f, "%d", t->max);
 		fprintf(f, "}");
 	}

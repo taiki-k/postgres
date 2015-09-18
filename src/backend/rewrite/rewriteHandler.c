@@ -1786,8 +1786,8 @@ fireRIRrules(Query *parsetree, List *activeRIRs, bool forUpdatePushedDown)
 		/*
 		 * Fetch any new security quals that must be applied to this RTE.
 		 */
-		get_row_security_policies(parsetree, parsetree->commandType, rte,
-								  rt_index, &securityQuals, &withCheckOptions,
+		get_row_security_policies(parsetree, rte, rt_index,
+								  &securityQuals, &withCheckOptions,
 								  &hasRowSecurity, &hasSubLinks);
 
 		if (securityQuals != NIL || withCheckOptions != NIL)
@@ -2765,6 +2765,21 @@ rewriteTargetView(Query *parsetree, Relation view)
 	heap_close(base_rel, NoLock);
 
 	/*
+	 * If the view query contains any sublink subqueries then we need to also
+	 * acquire locks on any relations they refer to.  We know that there won't
+	 * be any subqueries in the range table or CTEs, so we can skip those, as
+	 * in AcquireRewriteLocks.
+	 */
+	if (viewquery->hasSubLinks)
+	{
+		acquireLocksOnSubLinks_context context;
+
+		context.for_execute = true;
+		query_tree_walker(viewquery, acquireLocksOnSubLinks, &context,
+						  QTW_IGNORE_RC_SUBQUERIES);
+	}
+
+	/*
 	 * Create a new target RTE describing the base relation, and add it to the
 	 * outer query's rangetable.  (What's happening in the next few steps is
 	 * very much like what the planner would do to "pull up" the view into the
@@ -3011,6 +3026,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 			wco = makeNode(WithCheckOption);
 			wco->kind = WCO_VIEW_CHECK;
 			wco->relname = pstrdup(RelationGetRelationName(view));
+			wco->polname = NULL;
 			wco->qual = NULL;
 			wco->cascaded = cascaded;
 

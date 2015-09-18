@@ -4669,7 +4669,7 @@ SELECT foo FROM regexp_split_to_table('the quick brown fox', E'\\s*') AS foo;
        <entry> <literal>\e</> </entry>
        <entry> the character whose collating-sequence name
        is <literal>ESC</>,
-       or failing that, the character with octal value 033 </entry>
+       or failing that, the character with octal value <literal>033</> </entry>
        </row>
 
        <row>
@@ -4695,15 +4695,17 @@ SELECT foo FROM regexp_split_to_table('the quick brown fox', E'\\s*') AS foo;
        <row>
        <entry> <literal>\u</><replaceable>wxyz</> </entry>
        <entry> (where <replaceable>wxyz</> is exactly four hexadecimal digits)
-       the UTF16 (Unicode, 16-bit) character <literal>U+</><replaceable>wxyz</>
-       in the local byte ordering </entry>
+       the character whose hexadecimal value is
+       <literal>0x</><replaceable>wxyz</>
+       </entry>
        </row>
 
        <row>
        <entry> <literal>\U</><replaceable>stuvwxyz</> </entry>
        <entry> (where <replaceable>stuvwxyz</> is exactly eight hexadecimal
        digits)
-       reserved for a hypothetical Unicode extension to 32 bits
+       the character whose hexadecimal value is
+       <literal>0x</><replaceable>stuvwxyz</>
        </entry>
        </row>
 
@@ -4750,6 +4752,17 @@ SELECT foo FROM regexp_split_to_table('the quick brown fox', E'\\s*') AS foo;
     Hexadecimal digits are <literal>0</>-<literal>9</>,
     <literal>a</>-<literal>f</>, and <literal>A</>-<literal>F</>.
     Octal digits are <literal>0</>-<literal>7</>.
+   </para>
+
+   <para>
+    Numeric character-entry escapes specifying values outside the ASCII range
+    (0-127) have meanings dependent on the database encoding.  When the
+    encoding is UTF-8, escape values are equivalent to Unicode code points,
+    for example <literal>\u1234</> means the character <literal>U+1234</>.
+    For other multibyte encodings, character-entry escapes usually just
+    specify the concatenation of the byte values for the character.  If the
+    escape value does not correspond to any legal character in the database
+    encoding, no error will be raised, but it will never match any data.
    </para>
 
    <para>
@@ -10327,7 +10340,7 @@ table2-mapping
        <row>
         <entry><literal>||</literal></entry>
         <entry><type>jsonb</type></entry>
-        <entry>Concatentate two jsonb values into a new jsonb value</entry>
+        <entry>Concatenate two <type>jsonb</type> values into a new <type>jsonb</type> value</entry>
         <entry><literal>'["a", "b"]'::jsonb || '["c", "d"]'::jsonb</literal></entry>
        </row>
        <row>
@@ -10986,7 +10999,7 @@ table2-mapping
       If the argument to <literal>json_strip_nulls</> contains duplicate
       field names in any object, the result could be semantically somewhat
       different, depending on the order in which they occur. This is not an
-      issue for <literal>jsonb_strip_nulls</> since jsonb values never have
+      issue for <literal>jsonb_strip_nulls</> since <type>jsonb</type> values never have
       duplicate object field names.
     </para>
   </note>
@@ -13433,7 +13446,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
        <type>integer</type>
       </entry>
       <entry>
-       Integer bitmask indicating which arguments are not being included in the current
+       Integer bit mask indicating which arguments are not being included in the current
        grouping set
       </entry>
      </row>
@@ -16633,7 +16646,7 @@ SELECT set_config('log_statement_stats', 'off', false);
         </entry>
        <entry><type>boolean</type></entry>
        <entry>Cancel a backend's current query.  This is also allowed if the
-        calling role is a member of the role whose backend is being cancelled,
+        calling role is a member of the role whose backend is being canceled,
         however only superusers can cancel superuser backends.
         </entry>
       </row>
@@ -18600,7 +18613,7 @@ CREATE EVENT TRIGGER test_event_trigger_for_drops
         <literal><function>pg_event_trigger_table_rewrite_oid()</function></literal>
        </entry>
        <entry><type>Oid</type></entry>
-       <entry>The Oid of the table about to be rewritten.</entry>
+       <entry>The OID of the table about to be rewritten.</entry>
       </row>
 
       <row>
