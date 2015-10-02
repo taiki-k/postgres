@@ -164,6 +164,8 @@ static Sort *make_sort(PlannerInfo *root, Plan *lefttree, int numCols,
 		  AttrNumber *sortColIdx, Oid *sortOperators,
 		  Oid *collations, bool *nullsFirst,
 		  double limit_tuples);
+static inline bool
+should_ignore_ec_member(EquivalenceMember *em, Relids relids);
 static Plan *prepare_sort_from_pathkeys(PlannerInfo *root,
 						   Plan *lefttree, List *pathkeys,
 						   Relids relids,
@@ -4060,7 +4062,7 @@ static inline bool
 should_ignore_ec_member(EquivalenceMember *em, Relids relids)
 {
 	/*
-	 * If this is called from make_sort_from_pathkeys, relids may be NULL.
+	 * If this is called from make_sort_from_pathkeys(), relids may be NULL.
 	 * In this case, we must not ignore child members because inner/outer plan
 	 * of pushed-down merge join is always child table.
 	 */

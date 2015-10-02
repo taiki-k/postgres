@@ -1684,6 +1684,11 @@ try_join_pushdown(PlannerInfo *root,
 	 * so we need to do only once.
 	 */
 	old_joinclauses = extract_join_clauses(restrictlist, outer_rel, inner_rel);
+	if (list_length(old_joinclauses) <= 0)
+	{
+		elog(DEBUG1, "No join clauses specified. Give up.");
+		return;
+	}
 
 	/*
 	  * Make new joinrel between each of outer path's sub-paths and inner path.
