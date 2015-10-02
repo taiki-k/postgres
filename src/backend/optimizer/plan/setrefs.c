@@ -175,6 +175,8 @@ static bool extract_query_dependencies_walker(Node *node,
  * Currently, relations and user-defined functions are the only types of
  * objects that are explicitly tracked this way.
  *
+ * 7. We assign every plan node in the tree a unique ID.
+ *
  * We also perform one final optimization step, which is to delete
  * SubqueryScan plan nodes that aren't doing anything useful (ie, have
  * no qual and a no-op targetlist).  The reason for doing this last is that
@@ -437,6 +439,9 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 	if (plan == NULL)
 		return NULL;
 
+	/* Assign this node a unique ID. */
+	plan->plan_node_id = root->glob->lastPlanNodeId++;
+
 	/*
 	 * Plan-type-specific fixes
 	 */
@@ -609,6 +614,7 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 		case T_Sort:
 		case T_Unique:
 		case T_SetOp:
+		case T_Gather:
 
 			/*
 			 * These plan types don't actually bother to evaluate their
