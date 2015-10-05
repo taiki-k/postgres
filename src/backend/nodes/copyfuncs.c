@@ -1962,10 +1962,83 @@ _copyOnConflictExpr(const OnConflictExpr *from)
 /* ****************************************************************
  *						relation.h copy functions
  *
- * We don't support copying RelOptInfo, IndexOptInfo, or Path nodes.
+ * We don't support copying IndexOptInfo node.
  * There are some subsidiary structs that are useful to copy, though.
  * ****************************************************************
  */
+
+/*
+ * _copyRelOptInfo XXX
+ */
+static RelOptInfo *
+_copyRelOptInfo(const RelOptInfo *from)
+{
+	RelOptInfo *newnode = makeNode(RelOptInfo);
+
+	COPY_SCALAR_FIELD(reloptkind);
+	COPY_BITMAPSET_FIELD(relids);
+	COPY_SCALAR_FIELD(rows);
+	COPY_SCALAR_FIELD(width);
+	COPY_SCALAR_FIELD(consider_startup);
+	COPY_SCALAR_FIELD(consider_param_startup);
+	COPY_NODE_FIELD(reltargetlist);
+	//COPY_NODE_FIELD(pathlist);
+	//COPY_NODE_FIELD(ppilist);
+	COPY_SCALAR_FIELD(pathlist);
+	COPY_SCALAR_FIELD(ppilist);
+	COPY_NODE_FIELD(cheapest_startup_path);
+	COPY_NODE_FIELD(cheapest_total_path);
+	COPY_NODE_FIELD(cheapest_unique_path);
+	COPY_NODE_FIELD(cheapest_parameterized_paths);
+	COPY_SCALAR_FIELD(relid);
+	COPY_SCALAR_FIELD(reltablespace);
+	COPY_SCALAR_FIELD(rtekind);
+	COPY_SCALAR_FIELD(min_attr);
+	COPY_SCALAR_FIELD(max_attr);
+	COPY_BITMAPSET_FIELD(attr_needed);
+	COPY_SCALAR_FIELD(attr_widths);
+	COPY_NODE_FIELD(lateral_vars);
+	COPY_BITMAPSET_FIELD(lateral_relids);
+	COPY_BITMAPSET_FIELD(lateral_referencers);
+	COPY_NODE_FIELD(indexlist);
+	COPY_SCALAR_FIELD(pages);
+	COPY_SCALAR_FIELD(tuples);
+	COPY_SCALAR_FIELD(allvisfrac);
+	COPY_NODE_FIELD(subplan);
+	COPY_NODE_FIELD(subroot);
+	COPY_NODE_FIELD(subplan_params);
+	COPY_SCALAR_FIELD(serverid);
+	COPY_SCALAR_FIELD(fdwroutine);
+	COPY_SCALAR_FIELD(fdw_private);
+	COPY_NODE_FIELD(baserestrictinfo);
+	COPY_SCALAR_FIELD(baserestrictcost);
+	COPY_NODE_FIELD(joininfo);
+	COPY_SCALAR_FIELD(has_eclass_joins);
+
+	return newnode;
+}
+
+/*
+ * _copyPath XXX
+ */
+static Path *
+_copyPath(const Path *from)
+{
+	Path *newnode = makeNode(Path);
+
+	COPY_SCALAR_FIELD(pathtype);
+
+	//RelOptInfo *parent;
+	//ParamPathInfo *param_info;
+
+	COPY_SCALAR_FIELD(rows);
+	COPY_SCALAR_FIELD(startup_cost);
+	COPY_SCALAR_FIELD(total_cost);
+
+	COPY_NODE_FIELD(pathkeys);
+
+	return newnode;
+}
 
 /*
  * _copyPathKey
@@ -4505,6 +4578,12 @@ copyObject(const void *from)
 			/*
 			 * RELATION NODES
 			 */
+		case T_RelOptInfo:
+			retval = _copyRelOptInfo(from);
+			break;
+		case T_Path:
+			retval = _copyPath(from);
+			break;
 		case T_PathKey:
 			retval = _copyPathKey(from);
 			break;
