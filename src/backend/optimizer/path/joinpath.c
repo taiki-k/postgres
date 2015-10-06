@@ -1674,6 +1674,12 @@ try_join_pushdown(PlannerInfo *root,
 		return;
 	}
 
+	if (list_length(inner_rel->ppilist) > 0)
+	{
+		elog(DEBUG1, "ParamPathInfo is already set in inner_rel. Can't pushdown.");
+		return;
+	}
+
 	/*
 	  * Make new joinrel between each of outer path's sub-paths and inner path.
 	  */
@@ -1719,6 +1725,8 @@ try_join_pushdown(PlannerInfo *root,
 				get_parameterized_baserel_size(root, new_inner_rel,
 												added_restrictlist);
 		newppi->ppi_clauses = added_restrictlist;
+
+		new_inner_rel->ppilist = lappend(new_inner_rel->ppilist, newppi);
 
 		set_plain_rel_pathlist(root, new_inner_rel, NULL);
 		set_cheapest(new_inner_rel);
