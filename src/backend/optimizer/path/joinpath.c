@@ -1714,22 +1714,32 @@ try_join_pushdown(PlannerInfo *root,
 		 * Make a new RelOptInfo. The new one is from old inner_rel and
 		 * with added restrictinfo.
 		 */
-		new_inner_rel = copyObject(inner_rel);
-		Assert(new_inner_rel->pathlist == inner_rel->pathlist);
-		Assert(new_inner_rel->ppilist == inner_rel->ppilist);
-		Assert(new_inner_rel->baserestrictinfo != inner_rel->baserestrictinfo);
+		if (list_length(added_restrictlist) > 0)
+		{
+			new_inner_rel = copyObject(inner_rel);
+			Assert(new_inner_rel->pathlist == inner_rel->pathlist);
+			Assert(new_inner_rel->ppilist == inner_rel->ppilist);
+			Assert(!(new_inner_rel->baserestrictinfo) ||
+					new_inner_rel->baserestrictinfo != inner_rel->baserestrictinfo);
 
-		newppi = makeNode(ParamPathInfo);
-		newppi->ppi_req_outer = NULL;
-		newppi->ppi_rows =
-				get_parameterized_baserel_size(root, new_inner_rel,
-												added_restrictlist);
-		newppi->ppi_clauses = added_restrictlist;
+			/* Clear pathlist and ppilist from new RelOptInfo */
+			new_inner_rel->pathlist = NIL;
+			new_inner_rel->ppilist = NIL;
 
-		new_inner_rel->ppilist = lappend(new_inner_rel->ppilist, newppi);
+			newppi = makeNode(ParamPathInfo);
+			newppi->ppi_req_outer = bms_copy(new_inner_rel->lateral_relids);
+			newppi->ppi_rows =
+					get_parameterized_baserel_size(root, new_inner_rel,
+													added_restrictlist);
+			newppi->ppi_clauses = added_restrictlist;
 
-		set_plain_rel_pathlist(root, new_inner_rel, NULL);
-		set_cheapest(new_inner_rel);
+			new_inner_rel->ppilist = lappend(new_inner_rel->ppilist, newppi);
+
+			set_plain_rel_pathlist(root, new_inner_rel, NULL);
+			set_cheapest(new_inner_rel);
+		}
+		else
+			new_inner_rel = inner_rel;
 
 		/* XXX This is workaround for failing assertion at allpaths.c */
 		join_rel_level = root->join_rel_level;
