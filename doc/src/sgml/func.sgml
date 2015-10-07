@@ -3600,6 +3600,28 @@ cast(-44 as bit(12))           <lineannotation>111111010100</lineannotation>
     </para>
    </tip>
 
+   <caution>
+    <para>
+     While most regular-expression searches can be executed very quickly,
+     regular expressions can be contrived that take arbitrary amounts of
+     time and memory to process.  Be wary of accepting regular-expression
+     search patterns from hostile sources.  If you must do so, it is
+     advisable to impose a statement timeout.
+    </para>
+
+    <para>
+     Searches using <function>SIMILAR TO</function> patterns have the same
+     security hazards, since <function>SIMILAR TO</function> provides many
+     of the same capabilities as <acronym>POSIX</acronym>-style regular
+     expressions.
+    </para>
+
+    <para>
+     <function>LIKE</function> searches, being much simpler than the other
+     two options, are safer to use with possibly-hostile pattern sources.
+    </para>
+   </caution>
+
   <sect2 id="functions-like">
    <title><function>LIKE</function></title>
 
@@ -6130,12 +6152,14 @@ SELECT regexp_matches('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
 
      <listitem>
       <para>
-       <literal>V</literal> effectively
+       <literal>V</literal> with <function>to_char</function>
        multiplies the input values by
        <literal>10^<replaceable>n</replaceable></literal>, where
        <replaceable>n</replaceable> is the number of digits following
-       <literal>V</literal>.
-       <function>to_char</function> does not support the use of
+       <literal>V</literal>.  <literal>V</literal> with
+       <function>to_number</function> divides in a similar manner.
+       <function>to_char</function> and <function>to_number</function>
+       do not support the use of
        <literal>V</literal> combined with a decimal point
        (e.g., <literal>99.9V99</literal> is not allowed).
       </para>
