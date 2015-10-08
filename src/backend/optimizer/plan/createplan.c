@@ -4225,8 +4225,14 @@ prepare_sort_from_pathkeys(PlannerInfo *root, Plan *lefttree, List *pathkeys,
 				/*
 				 * Ignore child members unless they match the rel being
 				 * sorted.
+				 *
+				 * If this is called from make_sort_from_pathkeys(),
+				 * relids may be NULL. In this case, we must not ignore child
+				 * members because inner/outer plan of pushed-down merge join is
+				 * always child table.
 				 */
-				if (em->em_is_child &&
+				if (relids != NULL &&
+					em->em_is_child &&
 					!bms_equal(em->em_relids, relids))
 					continue;
 
@@ -4339,8 +4345,13 @@ find_ec_member_for_tle(EquivalenceClass *ec,
 
 		/*
 		 * Ignore child members unless they match the rel being sorted.
+		 *
+		 * If this is called from make_sort_from_pathkeys(), relids may be NULL.
+		 * In this case, we must not ignore child members because inner/outer
+		 * plan of pushed-down merge join is always child table.
 		 */
-		if (em->em_is_child &&
+		if (relids != NULL &&
+			em->em_is_child &&
 			!bms_equal(em->em_relids, relids))
 			continue;
 

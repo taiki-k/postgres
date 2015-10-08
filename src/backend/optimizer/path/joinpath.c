@@ -1662,6 +1662,23 @@ try_join_pushdown(PlannerInfo *root,
 
 	outer_path = (AppendPath *) outer_rel->cheapest_total_path;
 
+	switch (inner_rel->cheapest_total_path->type)
+	{
+	case T_Path :
+	case T_IndexPath :
+	case T_BitmapHeapPath :
+	case T_BitmapOrPath :
+	case T_BitmapAndPath :
+	case T_TidPath :
+		/* Do nothing. No-op */
+		break;
+	default :
+		{
+			elog(DEBUG1, "Type of Inner path is not supported yet. Give up.");
+			return;
+		}
+	}
+
 	/*
 	 * Extract join clauses to mutate CHECK() constraints.
 	 * We don't have to clobber this list to mutate CHECK() constraints,
@@ -1722,19 +1739,20 @@ try_join_pushdown(PlannerInfo *root,
 			Assert(!(new_inner_rel->baserestrictinfo) ||
 					new_inner_rel->baserestrictinfo != inner_rel->baserestrictinfo);
 
-			/* Clear pathlist and ppilist from new RelOptInfo */
+			/* Clear all paths, pathlist and ppilist from new RelOptInfo */
 			new_inner_rel->pathlist = NIL;
 			new_inner_rel->ppilist = NIL;
+			new_inner_rel->cheapest_parameterized_paths = NIL;
+			new_inner_rel->cheapest_startup_path = NULL;
+			new_inner_rel->cheapest_total_path = NULL;
+			new_inner_rel->cheapest_unique_path = NULL;
 
-			newppi = makeNode(ParamPathInfo);
-			newppi->ppi_req_outer = bms_copy(new_inner_rel->lateral_relids);
-			newppi->ppi_rows =
-					get_parameterized_baserel_size(root, new_inner_rel,
-													added_restrictlist);
-			newppi->ppi_clauses = added_restrictlist;
+			/* concatenate added restrictinfo to baserestrictinfo. */
+			new_inner_rel->baserestrictinfo =
+					list_concat(new_inner_rel->baserestrictinfo, added_restrictlist);
 
-			new_inner_rel->ppilist = lappend(new_inner_rel->ppilist, newppi);
-
+			/* Estimates size and cost, and make new paths. */
+			set_baserel_size_estimates(root, new_inner_rel);
 			set_plain_rel_pathlist(root, new_inner_rel, NULL);
 			set_cheapest(new_inner_rel);
 		}
