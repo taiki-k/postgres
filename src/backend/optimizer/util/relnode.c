@@ -22,6 +22,9 @@
 #include "optimizer/restrictinfo.h"
 #include "utils/hsearch.h"
 
+#ifdef  USE_ASSERT_CHECKING
+#include <access/sysattr.h>
+#endif
 
 typedef struct JoinHashEntry
 {
@@ -546,7 +549,17 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 
 			relids_tmp = bms_union(relids_tmp, parent_rel->relids);
 
-			Assert(ndx == parent_ndx);
+#ifdef USE_ASSERT_CHECKING
+			if (baserel->rtekind == parent_rel->rtekind)
+				Assert(ndx == parent_ndx);
+			else
+			if (parent_rel->rtekind != RTE_RELATION)
+				/* Parent is not table scan, child is table scan.*/
+				Assert(ndx + FirstLowInvalidHeapAttributeNumber + 1 == parent_ndx);
+			else
+				/* Parent is table scan, but child is not table scan.*/
+				Assert(false);
+#endif
 			is_needed =
 					(bms_nonempty_difference(
 							parent_rel->attr_needed[parent_ndx],
@@ -558,7 +571,7 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 		{
 			Relids	relids_tmp =
 					bms_del_members(bms_copy(relids), input_rel->relids);
-			Index	another_relid = -1;
+			int		another_relid = -1;
 
 			/* Try to detect Inner relation of pushed-down join. */
 			if (bms_get_singleton_member(relids_tmp, &another_relid))

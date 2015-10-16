@@ -1560,8 +1560,8 @@ check_constraint_mutator(Node *node, check_constraint_mutator_context *context)
  * Make RestrictInfo_List from CHECK() constraints.
  */
 static List *
-make_restrictinfos_from_check_constr(PlannerInfo *root,
-									List *joininfo, RelOptInfo *outer_rel)
+make_restrictinfos_from_check_constr(PlannerInfo *root, List *joininfo,
+									 RelOptInfo *outer_rel, bool *succeed)
 {
 	List			*result = NIL;
 	RangeTblEntry	*childRTE = root->simple_rte_array[outer_rel->relid];
@@ -1569,8 +1569,13 @@ make_restrictinfos_from_check_constr(PlannerInfo *root,
 						get_relation_constraints(root, childRTE->relid,
 													outer_rel, false);
 	ListCell		*lc;
-
 	check_constraint_mutator_context	context;
+
+	if (list_length(check_constr) <= 0)
+	{
+		*succeed = true;
+		return NIL;
+	}
 
 	context.joininfo = joininfo;
 	context.is_mutated = true;
@@ -1585,8 +1590,13 @@ make_restrictinfos_from_check_constr(PlannerInfo *root,
 										check_constraint_mutator,
 										(void *) &context);
 
-		if (context.is_mutated)
-			result = lappend(result, mutated);
+		if (!context.is_mutated)
+		{
+			*succeed = false;
+			list_free_deep(check_constr);
+			return NIL;
+		}
+		result = lappend(result, mutated);
 	}
 
 	Assert(list_length(check_constr) == list_length(result));
@@ -1691,11 +1701,13 @@ try_join_pushdown(PlannerInfo *root,
 		return;
 	}
 
+#ifdef NOT_USED
 	if (list_length(inner_rel->ppilist) > 0)
 	{
 		elog(DEBUG1, "ParamPathInfo is already set in inner_rel. Can't pushdown.");
 		return;
 	}
+#endif
 
 	/*
 	  * Make new joinrel between each of outer path's sub-paths and inner path.
@@ -1705,10 +1717,9 @@ try_join_pushdown(PlannerInfo *root,
 		RelOptInfo	*old_outer_rel = ((Path *) lfirst(lc))->parent;
 		RelOptInfo	*new_inner_rel;
 		RelOptInfo	*new_outer_rel;
-		ParamPathInfo *newppi;
 		List		*new_joinclauses;
 		List		*added_restrictlist;
-		ListCell	*lc_added;
+		bool		is_valid;
 		List		**join_rel_level;
 
 		Assert(!IS_DUMMY_REL(old_outer_rel));
@@ -1722,18 +1733,30 @@ try_join_pushdown(PlannerInfo *root,
 
 		/*
 		 * Make RestrictInfo list from CHECK() constraints of outer table.
+		 * "is_valid" indicates whether making RestrictInfo list succeeded or not.
 		 */
 		added_restrictlist =
 				make_restrictinfos_from_check_constr(root, new_joinclauses,
-													old_outer_rel);
+													old_outer_rel, &is_valid);
 
-		/*
-		 * Make a new RelOptInfo. The new one is from old inner_rel and
-		 * with added restrictinfo.
-		 */
+		if (!is_valid)
+		{
+			elog(DEBUG1, "Join clause doesn't match with CHECK() constraint. "
+					"Can't pushdown.");
+			list_free_deep(new_append_subpaths);
+			list_free(old_joinclauses);
+			return;
+		}
+
 		if (list_length(added_restrictlist) > 0)
 		{
+			/*
+			 * New RestrictInfos are available, thus create a new (temporary)
+			 * RelOptInfo. The new one is copied from old inner_rel.
+			 * This is valid only for pushed-down JoinPath node.
+			 */
 			new_inner_rel = copyObject(inner_rel);
+
 			Assert(new_inner_rel->pathlist == inner_rel->pathlist);
 			Assert(new_inner_rel->ppilist == inner_rel->ppilist);
 			Assert(!(new_inner_rel->baserestrictinfo) ||
@@ -1747,7 +1770,7 @@ try_join_pushdown(PlannerInfo *root,
 			new_inner_rel->cheapest_total_path = NULL;
 			new_inner_rel->cheapest_unique_path = NULL;
 
-			/* concatenate added restrictinfo to baserestrictinfo. */
+			/* concatenate New RestrictInfo list to baserestrictinfo. */
 			new_inner_rel->baserestrictinfo =
 					list_concat(new_inner_rel->baserestrictinfo, added_restrictlist);
 
@@ -1757,9 +1780,10 @@ try_join_pushdown(PlannerInfo *root,
 			set_cheapest(new_inner_rel);
 		}
 		else
+			/* No new RestrictInfo is available, thus use a old RelOptInfo. */
 			new_inner_rel = inner_rel;
 
-		/* XXX This is workaround for failing assertion at allpaths.c */
+		/* FIXME This is workaround for failing assertion at allpaths.c */
 		join_rel_level = root->join_rel_level;
 		root->join_rel_level = NULL;
 
