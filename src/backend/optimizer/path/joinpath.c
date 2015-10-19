@@ -1648,8 +1648,8 @@ extract_join_clauses(List *restrictlist, RelOptInfo *outer_prel,
 }
 
 /*
-  Try to push JoinPath down under AppendPath.
-*/
+ * Try to push JoinPath down under AppendPath.
+ */
 static void
 try_join_pushdown(PlannerInfo *root,
 				  RelOptInfo *joinrel, RelOptInfo *outer_rel,
@@ -1671,6 +1671,12 @@ try_join_pushdown(PlannerInfo *root,
 	}
 
 	outer_path = (AppendPath *) outer_rel->cheapest_total_path;
+
+	if (outer_rel->rtekind != RTE_RELATION)
+	{
+		elog(DEBUG1, "Outer Relation is not for table scan. Give up.");
+		return;
+	}
 
 	switch (inner_rel->cheapest_total_path->type)
 	{
@@ -1710,8 +1716,8 @@ try_join_pushdown(PlannerInfo *root,
 #endif
 
 	/*
-	  * Make new joinrel between each of outer path's sub-paths and inner path.
-	  */
+	 * Make new joinrel between each of outer path's sub-paths and inner path.
+	 */
 	foreach(lc, outer_path->subpaths)
 	{
 		RelOptInfo	*old_outer_rel = ((Path *) lfirst(lc))->parent;
@@ -1751,7 +1757,7 @@ try_join_pushdown(PlannerInfo *root,
 		if (list_length(added_restrictlist) > 0)
 		{
 			/*
-			 * New RestrictInfos are available, thus create a new (temporary)
+			 * New RestrictInfos are available, therefore create a new (temporary)
 			 * RelOptInfo. The new one is copied from old inner_rel.
 			 * This is valid only for pushed-down JoinPath node.
 			 */
@@ -1780,7 +1786,7 @@ try_join_pushdown(PlannerInfo *root,
 			set_cheapest(new_inner_rel);
 		}
 		else
-			/* No new RestrictInfo is available, thus use a old RelOptInfo. */
+			/* No new RestrictInfo is available, therefore use a old one. */
 			new_inner_rel = inner_rel;
 
 		/* FIXME This is workaround for failing assertion at allpaths.c */

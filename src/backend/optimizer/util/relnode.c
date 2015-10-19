@@ -22,10 +22,6 @@
 #include "optimizer/restrictinfo.h"
 #include "utils/hsearch.h"
 
-#ifdef  USE_ASSERT_CHECKING
-#include <access/sysattr.h>
-#endif
-
 typedef struct JoinHashEntry
 {
 	Relids		join_relids;	/* hash key --- MUST BE FIRST */
@@ -549,17 +545,8 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 
 			relids_tmp = bms_union(relids_tmp, parent_rel->relids);
 
-#ifdef USE_ASSERT_CHECKING
-			if (baserel->rtekind == parent_rel->rtekind)
-				Assert(ndx == parent_ndx);
-			else
-			if (parent_rel->rtekind != RTE_RELATION)
-				/* Parent is not table scan, child is table scan.*/
-				Assert(ndx + FirstLowInvalidHeapAttributeNumber + 1 == parent_ndx);
-			else
-				/* Parent is table scan, but child is not table scan.*/
-				Assert(false);
-#endif
+			Assert(ndx == parent_ndx);
+
 			is_needed =
 					(bms_nonempty_difference(
 							parent_rel->attr_needed[parent_ndx],
