@@ -22,6 +22,7 @@
 #include "optimizer/restrictinfo.h"
 #include "utils/hsearch.h"
 
+
 typedef struct JoinHashEntry
 {
 	Relids		join_relids;	/* hash key --- MUST BE FIRST */

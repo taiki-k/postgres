@@ -1502,7 +1502,7 @@ select_mergejoin_clauses(PlannerInfo *root,
 }
 
 /*
- * Try to substitute Var node according to join clause.
+ * Try to substitute Var node according to join conditions.
  * This process is from following steps.
  *
  * 1. Try to find whether Var node matches to left/right Var node of
@@ -1520,7 +1520,7 @@ select_mergejoin_clauses(PlannerInfo *root,
 static Node *
 substitute_node_with_join_cond(Node *node, substitution_node_context *context)
 {
-	/* Failed to mutate. Abort. */
+	/* Failed to substitute. Abort. */
 	if (!context->is_substituted)
 		return (Node *) copyObject(node);
 
@@ -1551,7 +1551,7 @@ substitute_node_with_join_cond(Node *node, substitution_node_context *context)
 			if (equal(get_leftop(expr), node))
 			{
 				/*
-				 * This node is equal to LEFT of join clause,
+				 * This node is equal to LEFT node of join condition,
 				 * thus will be replaced with RIGHT clause.
 				 */
 				return (Node *) copyObject(get_rightop(expr));
@@ -1560,7 +1560,7 @@ substitute_node_with_join_cond(Node *node, substitution_node_context *context)
 			if (equal(get_rightop(expr), node))
 			{
 				/*
-				 * This node is equal to RIGHT of join clause,
+				 * This node is equal to RIGHT node of join condition,
 				 * thus will be replaced with LEFT clause.
 				 */
 				return (Node *) copyObject(get_leftop(expr));
@@ -1682,7 +1682,53 @@ extract_join_clauses(List *restrictlist, RelOptInfo *outer_prel,
 }
 
 /*
- * Try to push JoinPath down under AppendPath.
+ * try_join_pushdown
+ *
+ * When outer-path of JOIN is AppendPath, we can rewrite path-tree with
+ * relocation of JoinPath across AppendPath, to generate equivalent
+ * results, like a diagram below.
+ * This adjustment gives us a few performance benefits when the relations
+ * scaned by sub-plan of Append-node have CHECK() constraints - typically,
+ * configured as partitioned table.
+ *
+ * In case of INNER JOIN with equivalent join condition, like A = B, we
+ * can exclude a part of inner rows that are obviously unreferenced, if
+ * outer side has CHECK() constraints that contains join keys.
+ * The CHECK() constraints ensures all the rows within outer relation
+ * satisfies the condition, in other words, any inner rows that does not
+ * satisfies the condition (with adjustment using equivalence of join keys)
+ * never match any outer rows.
+ *
+ * Once we can reduce number of inner rows, here are two beneficial scenario.
+ * 1. HashJoin may avoid split of hash-table even if preload of entire
+ *    inner relation exceeds work_mem.
+ * 2. MergeJoin may be able to take smaller scale of Sort, because quick-sort
+ *    is O(NlogN) scale problem. Reduction of rows to be sorted on both side
+ *    reduces CPU cost more than liner.
+ *
+ * [BEFORE]
+ * JoinPath ... (parent.X = inner.Y)
+ *  -> AppendPath on parent
+ *    -> ScanPath on child_1 ... CHECK(hash(X) % 3 = 0)
+ *    -> ScanPath on child_2 ... CHECK(hash(X) % 3 = 1)
+ *    -> ScanPath on child_3 ... CHECK(hash(X) % 3 = 2)
+ *  -> ScanPath on inner
+ *
+ * [AFTER]
+ * AppendPath
+ *  -> JoinPath ... (child_1.X = inner.Y)
+ *    -> ScanPath on child_1 ... CHECK(hash(X) % 3 = 0)
+ *    -> ScanPath on inner ... filter (hash(Y) % 3 = 0)
+ *  -> JoinPath ... (child_2.X = inner.Y)
+ *    -> ScanPath on child_2 ... CHECK(hash(X) % 3 = 1)
+ *    -> ScanPath on inner ... filter (hash(Y) % 3 = 1)
+ *  -> JoinPath ... (child_3.X = inner.Y)
+ *    -> ScanPath on child_3 ... CHECK(hash(X) % 3 = 2)
+ *    -> ScanPath on inner ... filter (hash(Y) % 3 = 2)
+ *
+ * Point to be focused on is filter condition attached on child relation's
+ * scan. It is clause of CHECK() constraint, but X is replaced by Y using
+ * equivalence join condition.
  */
 static void
 try_join_pushdown(PlannerInfo *root,
@@ -1730,8 +1776,8 @@ try_join_pushdown(PlannerInfo *root,
 	}
 
 	/*
-	 * Extract join clauses to mutate CHECK() constraints.
-	 * We don't have to clobber this list to mutate CHECK() constraints,
+	 * Extract join clauses to convert CHECK() constraints.
+	 * We don't have to clobber this list to convert CHECK() constraints,
 	 * so we need to do only once.
 	 */
 	joinclauses_parent = extract_join_clauses(restrictlist, outer_rel, inner_rel);
@@ -1847,7 +1893,17 @@ try_join_pushdown(PlannerInfo *root,
 			set_cheapest(inner_rel);
 		}
 
-		/* FIXME This is workaround for failing assertion at allpaths.c */
+		/*
+		 * NOTE: root->join_rel_level is used to track candidate of join
+		 * relations for each level, then these relations are consolidated
+		 * to one relation.
+		 * (See the comment in standard_join_search)
+		 *
+		 * Even though we construct RelOptInfo of child relations of the
+		 * Append node, these relations should not appear as candidate of
+		 * relations join in the later stage. So, we once save the list
+		 * during make_join_rel() for the child relations.
+		 */
 		join_rel_level = root->join_rel_level;
 		root->join_rel_level = NULL;
 
@@ -1857,7 +1913,7 @@ try_join_pushdown(PlannerInfo *root,
 		alter_outer_rel =
 				make_join_rel(root, orig_outer_rel, inner_rel);
 
-		/* FIXME Undo above workaround. */
+		/* restore the join_rel_level */
 		root->join_rel_level = join_rel_level;
 
 		Assert(alter_outer_rel != NULL);
