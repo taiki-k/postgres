@@ -7,7 +7,7 @@
   <note>
    <title>Release Date</title>
    <simpara>2015-??-??</simpara>
-   <simpara>Current as of 2015-10-03</simpara>
+   <simpara>Current as of 2015-11-07</simpara>
   </note>
 
   <sect2>
@@ -153,11 +153,28 @@
     </listitem>
 
     <listitem>
+     <para>
+      The configuration parameter <varname>checkpoint_segments</varname> has
+      been removed.  Its place is taken by the new
+      setting <xref linkend="guc-max-wal-size">.  If you had previously
+      tuned <varname>checkpoint_segments</varname>, the following formula will
+      give you an approximately equivalent setting:
+<programlisting>
+max_wal_size = (3 * checkpoint_segments) * 16MB
+</programlisting>
+      Note that the default setting for <varname>max_wal_size</varname> is
+      much higher than the default <varname>checkpoint_segments</varname> used
+      to be, so setting this might no longer be necessary.
+     </para>
+    </listitem>
+
+    <listitem>
 <!--
+2015-10-20 [b06f1f2] Robert..: Put back ssl_renegotiation_limit parameter, bu..
 2015-07-28 [6087d95] Andres..: Remove ssl renegotiation support.
 -->
      <para>
-      Remove server configuration
+      Disable server configuration
       parameter <varname>ssl_renegotiation_limit</>, which was deprecated
       in earlier releases (Andres Freund)
      </para>
@@ -167,6 +184,9 @@
       bugs to be considered a net negative in practice, and it is due to be
       removed from future versions of the relevant standards.  We have
       therefore removed support for it from <productname>PostgreSQL</>.
+      The <varname>ssl_renegotiation_limit</> parameter still exists, but
+      cannot be set to anything but zero (disabled).  It's not documented
+      anymore, either.
      </para>
     </listitem>
 
@@ -592,18 +612,22 @@ FIXME: Add Andres
 2015-02-03 [91fa7b4] Heikki..: Add API functions to libpq to interrogate SSL ..
 -->
        <para>
-        Add <application>libpq</> function <link
-        linkend="libpq-pqsslAttribute"><function>PQsslAttribute()</></>
-        that returns <acronym>SSL</> information (Heikki Linnakangas)
+        Add <application>libpq</> functions to return <acronym>SSL</>
+        information in an implementation-independent way (Heikki Linnakangas)
        </para>
 
        <para>
-        While <link linkend="libpq-pqgetssl"><function>PQgetssl()</></>
-        can still be used to call <productname>OpenSSL</>
-        functions, <function>PQsslAttribute()</> returns <acronym>SSL</>
-        information in an <acronym>SSL</>-implementation-independent way.
-        (Future versions of libpq might support other <acronym>SSL</>
-        implementations.)
+        While <link linkend="libpq-pqgetssl"><function>PQgetssl()</></> can
+        still be used to call <productname>OpenSSL</> functions, it is now
+        considered deprecated because future versions
+        of <application>libpq</> might support other <acronym>SSL</>
+        implementations.  When possible, use the new
+        functions <link
+        linkend="libpq-pqsslattribute"><function>PQsslAttribute()</></>, <link
+        linkend="libpq-pqsslattributenames"><function>PQsslAttributeNames()</></>,
+        and <link linkend="libpq-pqsslinuse"><function>PQsslInUse()</></>
+        to obtain <acronym>SSL</> information in
+        an <acronym>SSL</>-implementation-independent way.
        </para>
       </listitem>
 
@@ -2045,12 +2069,12 @@ FIXME: Add more specifics?
 2014-09-12 [a2dabf0] Stephe..: Add unicode_{column|header|border}_style to psql
 -->
         <para>
-         Allow column, header, and border control to <application>psql</>'s
-         Unicode style (Pavel Stehule)
+         Provide separate column, header, and border linestyle control
+         in <application>psql</>'s unicode linestyle (Pavel Stehule)
         </para>
 
         <para>
-         Single or double output is supported;  the default is
+         Single or double lines are supported; the default is
          <literal>single</>.
         </para>
        </listitem>
