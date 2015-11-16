@@ -25,8 +25,8 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/plancat.h"
+#include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
-#include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
 
 typedef struct
@@ -58,7 +58,7 @@ static List *select_mergejoin_clauses(PlannerInfo *root,
 						 JoinType jointype,
 						 bool *mergejoin_allowed);
 
-static void try_join_pushdown(PlannerInfo *root,
+static void try_append_pullup_across_join(PlannerInfo *root,
 						  RelOptInfo *joinrel, RelOptInfo *outer_rel,
 						  RelOptInfo *inner_rel,
 						  List *restrictlist);
@@ -105,7 +105,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 */
 	if (!IS_OUTER_JOIN(jointype))
 	{
-		try_join_pushdown(root, joinrel, outerrel, innerrel, restrictlist);
+		try_append_pullup_across_join(root, joinrel, outerrel, innerrel, restrictlist);
 	}
 
 	extra.restrictlist = restrictlist;
@@ -1646,17 +1646,15 @@ static List *
 convert_parent_joinclauses_to_child(PlannerInfo *root, List *join_clauses,
 									RelOptInfo *outer_rel)
 {
-	Index		parent_relid =
-					find_childrel_appendrelinfo(root, outer_rel)->parent_relid;
-	List		*clauses_parent = get_actual_clauses(join_clauses);
-	List		*clauses_child = NIL;
-	ListCell	*lc;
+	AppendRelInfo	*appinfo = find_childrel_appendrelinfo(root, outer_rel);
+	List			*clauses_parent = get_actual_clauses(join_clauses);
+	List			*clauses_child = NIL;
+	ListCell		*lc;
 
 	foreach(lc, clauses_parent)
 	{
-		Node	*one_clause_child = (Node *) copyObject(lfirst(lc));
-
-		ChangeVarNodes(one_clause_child, parent_relid, outer_rel->relid, 0);
+		Node	*one_clause_child =
+					adjust_appendrel_attrs(root, lfirst(lc), appinfo);
 		clauses_child = lappend(clauses_child, one_clause_child);
 	}
 
@@ -1682,7 +1680,7 @@ extract_join_clauses(List *restrictlist, RelOptInfo *outer_prel,
 }
 
 /*
- * try_join_pushdown
+ * try_append_pullup_across_join
  *
  * When outer-path of JOIN is AppendPath, we can rewrite path-tree with
  * relocation of JoinPath across AppendPath, to generate equivalent
@@ -1731,48 +1729,22 @@ extract_join_clauses(List *restrictlist, RelOptInfo *outer_prel,
  * equivalence join condition.
  */
 static void
-try_join_pushdown(PlannerInfo *root,
+try_append_pullup_across_join(PlannerInfo *root,
 				  RelOptInfo *joinrel, RelOptInfo *outer_rel,
 				  RelOptInfo *inner_rel,
 				  List *restrictlist)
 {
 	AppendPath	*outer_path;
-	ListCell	*lc;
+	ListCell	*lc_subpath;
+	ListCell	*lc_outer_path, *lc_inner_path;
 	List		*joinclauses_parent;
 	List		*alter_append_subpaths = NIL;
-
-	Assert(outer_rel->cheapest_total_path != NULL);
-
-	/* When specified outer path is not an AppendPath, nothing to do here. */
-	if (!IsA(outer_rel->cheapest_total_path, AppendPath))
-	{
-		elog(DEBUG1, "Outer path is not an AppendPath. Do nothing.");
-		return;
-	}
-
-	outer_path = (AppendPath *) outer_rel->cheapest_total_path;
+	int			num_pathlist_join = list_length(joinrel->pathlist);
 
 	if (outer_rel->rtekind != RTE_RELATION)
 	{
 		elog(DEBUG1, "Outer Relation is not for table scan. Give up.");
 		return;
-	}
-
-	switch (inner_rel->cheapest_total_path->pathtype)
-	{
-	case T_SeqScan :
-	case T_SampleScan :
-	case T_IndexScan :
-	case T_IndexOnlyScan :
-	case T_BitmapHeapScan :
-	case T_TidScan :
-		/* Do nothing. No-op */
-		break;
-	default :
-		{
-			elog(DEBUG1, "Type of Inner path is not supported yet. Give up.");
-			return;
-		}
 	}
 
 	/*
@@ -1789,179 +1761,260 @@ try_join_pushdown(PlannerInfo *root,
 
 	if (list_length(inner_rel->ppilist) > 0)
 	{
-		elog(DEBUG1, "ParamPathInfo is already set in inner_rel. Can't pushdown.");
+		elog(DEBUG1, "ParamPathInfo is already set in inner_rel. Can't pull-up.");
 		return;
 	}
 
-	/*
-	 * Make new joinrel between each of outer path's sub-paths and inner path.
-	 */
-	foreach(lc, outer_path->subpaths)
+	foreach(lc_outer_path, outer_rel->pathlist)
 	{
-		RelOptInfo	*orig_outer_rel = ((Path *) lfirst(lc))->parent;
-		RelOptInfo	*alter_outer_rel;
-		Path		*alter_path = NULL;
-		List		*joinclauses_child;
-		List		*restrictlist_by_check_constr;
-		bool		is_valid;
-		List		**join_rel_level;
-
-		Assert(!IS_DUMMY_REL(orig_outer_rel));
-
-		/*
-		 * Join clause points parent's relid,
-		 * so we must change it to child's one.
-		 */
-		joinclauses_child = convert_parent_joinclauses_to_child(root, joinclauses_parent,
-													orig_outer_rel);
-
-		/*
-		 * Make RestrictInfo list from CHECK() constraints of outer table.
-		 * "is_valid" indicates whether making RestrictInfo list succeeded or not.
-		 */
-		restrictlist_by_check_constr =
-				create_rinfo_from_check_constr(root, joinclauses_child,
-													orig_outer_rel, &is_valid);
-
-		if (!is_valid)
+		/* When specified outer path is not an AppendPath, nothing to do here. */
+		if (!IsA(lfirst(lc_outer_path), AppendPath))
 		{
-			elog(DEBUG1, "Join clause doesn't match with CHECK() constraint. "
-					"Can't pushdown.");
-			list_free_deep(alter_append_subpaths);
-			list_free(joinclauses_parent);
-			return;
-		}
-
-		if (list_length(restrictlist_by_check_constr) > 0)
-		{
-			/* Prepare ParamPathInfo for RestrictInfos by CHECK constraints. */
-			ParamPathInfo *newppi = makeNode(ParamPathInfo);
-
-			newppi->ppi_req_outer = NULL;
-			newppi->ppi_rows =
-					get_parameterized_baserel_size(root,
-													inner_rel,
-													restrictlist_by_check_constr);
-			newppi->ppi_clauses = restrictlist_by_check_constr;
-
-			/* Copy Path of inner relation, and specify newppi to it. */
-			alter_path = copyObject(inner_rel->cheapest_total_path);
-			alter_path->param_info = newppi;
-
-			/* Re-calculate costs of alter_path */
-			switch (alter_path->pathtype)
-			{
-			case T_SeqScan :
-				cost_seqscan(alter_path, root, inner_rel, newppi);
-				break;
-			case T_SampleScan :
-				cost_samplescan(alter_path, root, inner_rel, newppi);
-				break;
-			case T_IndexScan :
-			case T_IndexOnlyScan :
-				{
-					IndexPath *ipath = (IndexPath *) alter_path;
-
-					cost_index(ipath, root, 1.0);
-				}
-				break;
-			case T_BitmapHeapScan :
-				{
-					BitmapHeapPath *bpath = (BitmapHeapPath *) alter_path;
-
-					cost_bitmap_heap_scan(&bpath->path, root, inner_rel,
-							newppi, bpath->bitmapqual, 1.0);
-				}
-				break;
-			case T_TidScan :
-				{
-					TidPath *tpath = (TidPath *) alter_path;
-
-					cost_tidscan(&tpath->path, root, inner_rel,
-							tpath->tidquals, newppi);
-				}
-				break;
-			default:
-				break;
-			}
-
-			/*
-			 * Append this path to pathlist temporary.
-			 * This path will be removed after returning from make_join_rel().
-			 */
-			inner_rel->pathlist = lappend(inner_rel->pathlist, alter_path);
-			set_cheapest(inner_rel);
-		}
-
-		/*
-		 * NOTE: root->join_rel_level is used to track candidate of join
-		 * relations for each level, then these relations are consolidated
-		 * to one relation.
-		 * (See the comment in standard_join_search)
-		 *
-		 * Even though we construct RelOptInfo of child relations of the
-		 * Append node, these relations should not appear as candidate of
-		 * relations join in the later stage. So, we once save the list
-		 * during make_join_rel() for the child relations.
-		 */
-		join_rel_level = root->join_rel_level;
-		root->join_rel_level = NULL;
-
-		/*
-		 * Create new joinrel (as a sub-path of Append).
-		 */
-		alter_outer_rel =
-				make_join_rel(root, orig_outer_rel, inner_rel);
-
-		/* restore the join_rel_level */
-		root->join_rel_level = join_rel_level;
-
-		Assert(alter_outer_rel != NULL);
-
-		if (alter_path)
-		{
-			/*
-			 * Remove (temporary added) alter_path from pathlist.
-			 * The alter_path may be inner/outer path of JoinPath made
-			 * by make_join_rel() above, thus we must not free alter_path itself.
-			 */
-			inner_rel->pathlist = list_delete_ptr(inner_rel->pathlist, alter_path);
-			set_cheapest(inner_rel);
-		}
-
-		if (IS_DUMMY_REL(alter_outer_rel))
-		{
-			pfree(alter_outer_rel);
+			elog(DEBUG1, "Outer path is not an AppendPath. Do nothing.");
 			continue;
 		}
 
-		/*
-		 * We must check if alter_outer_rel has one or more paths.
-		 * add_path() sometime rejects to add new path to parent RelOptInfo.
-		 */
-		if (list_length(alter_outer_rel->pathlist) <= 0)
+		outer_path = (AppendPath *) lfirst(lc_outer_path);
+
+		foreach(lc_inner_path, inner_rel->pathlist)
 		{
+			switch (((Path *) lfirst(lc_inner_path))->pathtype)
+			{
+			case T_SeqScan :
+			case T_SampleScan :
+			case T_IndexScan :
+			case T_IndexOnlyScan :
+			case T_BitmapHeapScan :
+			case T_TidScan :
+				/* Do nothing. No-op */
+				break;
+			default :
+				{
+					elog(DEBUG1, "Type of Inner path is not supported yet. Give up.");
+					continue;
+				}
+			}
+
 			/*
-			 * Sadly, No paths added. This means that pushdown is failed,
-			 * thus clean up here.
+			 * Make new joinrel between each of outer path's sub-paths and inner path.
 			 */
-			list_free_deep(alter_append_subpaths);
-			pfree(alter_outer_rel);
+			foreach(lc_subpath, outer_path->subpaths)
+			{
+				RelOptInfo	*orig_outer_sub_rel = ((Path *) lfirst(lc_subpath))->parent;
+				RelOptInfo	*alter_outer_sub_rel;
+				Path		*alter_inner_path = NULL;
+				List		*joinclauses_child;
+				List		*restrictlist_by_check_constr;
+				bool		is_valid;
+				List		**join_rel_level;
+
+				ListCell	*parentvars, *childvars;
+
+				Assert(!IS_DUMMY_REL(orig_outer_sub_rel));
+
+				/*
+				 * Join clause points parent's relid,
+				 * so we must change it to child's one.
+				 */
+				joinclauses_child =
+						convert_parent_joinclauses_to_child(root,
+													joinclauses_parent,
+													orig_outer_sub_rel);
+
+				/*
+				 * Make RestrictInfo list from CHECK() constraints of outer table.
+				 * "is_valid" indicates whether making RestrictInfo list succeeded or not.
+				 */
+				restrictlist_by_check_constr =
+						create_rinfo_from_check_constr(root, joinclauses_child,
+													orig_outer_sub_rel, &is_valid);
+
+				if (!is_valid)
+				{
+					elog(DEBUG1, "Join clause doesn't match with CHECK() constraint. "
+									"Can't pull-up.");
+					list_free_deep(alter_append_subpaths);
+					list_free(joinclauses_parent);
+					return;
+				}
+
+				if (list_length(restrictlist_by_check_constr) > 0)
+				{
+					/* Prepare ParamPathInfo for RestrictInfos by CHECK constraints. */
+					ParamPathInfo *newppi = makeNode(ParamPathInfo);
+
+					newppi->ppi_req_outer = NULL;
+					newppi->ppi_rows =
+							get_parameterized_baserel_size(root,
+															inner_rel,
+															restrictlist_by_check_constr);
+					newppi->ppi_clauses = restrictlist_by_check_constr;
+
+					/* Copy Path of inner relation, and specify newppi to it. */
+					alter_inner_path = copyObject(lfirst(lc_inner_path));
+					alter_inner_path->param_info = newppi;
+
+					/* Re-calculate costs of alter_path */
+					switch (alter_inner_path->pathtype)
+					{
+					case T_SeqScan :
+						cost_seqscan(alter_inner_path, root, inner_rel, newppi);
+						break;
+					case T_SampleScan :
+						cost_samplescan(alter_inner_path, root, inner_rel, newppi);
+						break;
+					case T_IndexScan :
+					case T_IndexOnlyScan :
+						{
+							IndexPath *ipath = (IndexPath *) alter_inner_path;
+
+							cost_index(ipath, root, 1.0);
+						}
+						break;
+					case T_BitmapHeapScan :
+						{
+							BitmapHeapPath *bpath = (BitmapHeapPath *) alter_inner_path;
+
+							cost_bitmap_heap_scan(&bpath->path, root, inner_rel,
+									newppi, bpath->bitmapqual, 1.0);
+						}
+						break;
+					case T_TidScan :
+						{
+							TidPath *tpath = (TidPath *) alter_inner_path;
+
+							cost_tidscan(&tpath->path, root, inner_rel,
+									tpath->tidquals, newppi);
+						}
+						break;
+					default:
+						Assert(false);
+						break;
+					}
+
+					/*
+					 * Append this path to pathlist temporary.
+					 * This path will be removed after returning from make_join_rel().
+					 */
+					inner_rel->pathlist = lappend(inner_rel->pathlist, alter_inner_path);
+					set_cheapest(inner_rel);
+				}
+
+				/* XXX Add comment here. */
+				forboth(parentvars, outer_rel->reltargetlist,
+						childvars, orig_outer_sub_rel->reltargetlist)
+				{
+					Var		*parentvar = (Var *) lfirst(parentvars);
+					Var		*childvar = (Var *) lfirst(childvars);
+					int		p_ndx;
+					Relids	required_relids;
+
+					if (!IsA(parentvar, Var) || !IsA(childvar, Var))
+						continue;
+
+					Assert(find_base_rel(root, parentvar->varno) == outer_rel);
+					p_ndx = parentvar->varattno - outer_rel->min_attr;
+
+					required_relids = bms_del_members(
+							bms_copy(outer_rel->attr_needed[p_ndx]),
+							joinrel->relids);
+
+					if (!bms_is_empty(required_relids))
+					{
+						RelOptInfo	*baserel =
+								find_base_rel(root, childvar->varno);
+						int			c_ndx =
+								childvar->varattno - baserel->min_attr;
+
+						baserel->attr_needed[c_ndx] = bms_add_members(
+								baserel->attr_needed[c_ndx],
+								required_relids);
+					}
+				}
+
+				/*
+				 * NOTE: root->join_rel_level is used to track candidate of join
+				 * relations for each level, then these relations are consolidated
+				 * to one relation.
+				 * (See the comment in standard_join_search)
+				 *
+				 * Even though we construct RelOptInfo of child relations of the
+				 * Append node, these relations should not appear as candidate of
+				 * relations join in the later stage. So, we once save the list
+				 * during make_join_rel() for the child relations.
+				 */
+				join_rel_level = root->join_rel_level;
+				root->join_rel_level = NULL;
+
+				/*
+				 * Create new joinrel (as a sub-path of Append).
+				 */
+				alter_outer_sub_rel =
+						make_join_rel(root, orig_outer_sub_rel, inner_rel);
+
+				/* restore the join_rel_level */
+				root->join_rel_level = join_rel_level;
+
+				Assert(alter_outer_sub_rel != NULL);
+
+				if (alter_inner_path)
+				{
+					/*
+					 * Remove (temporary added) alter_inner_path from pathlist.
+					 * The alter_inner_path may be inner/outer path of JoinPath made
+					 * by make_join_rel() above, thus we must not free alter_inner_path itself.
+					 */
+					inner_rel->pathlist = list_delete_ptr(inner_rel->pathlist, alter_inner_path);
+					set_cheapest(inner_rel);
+				}
+
+				if (IS_DUMMY_REL(alter_outer_sub_rel))
+				{
+					pfree(alter_outer_sub_rel);
+					continue;
+				}
+
+				/*
+				 * We must check if alter_outer_sub_rel has one or more paths.
+				 * add_path() sometime rejects to add new path to parent RelOptInfo.
+				 */
+				if (list_length(alter_outer_sub_rel->pathlist) <= 0)
+				{
+					/*
+					 * Sadly, No paths added. This means that pull-up is failed,
+					 * thus clean up here.
+					 */
+					list_free_deep(alter_append_subpaths);
+					pfree(alter_outer_sub_rel);
+					list_free(joinclauses_parent);
+					elog(DEBUG1, "Append pull-up failed.");
+					return;
+				}
+
+				set_cheapest(alter_outer_sub_rel);
+				Assert(alter_outer_sub_rel->cheapest_total_path != NULL);
+				alter_append_subpaths = lappend(alter_append_subpaths,
+											alter_outer_sub_rel->cheapest_total_path);
+			} /* End of foreach(outer_path->subpaths) */
+
+			/* Append pull-up is succeeded. Add path to original joinrel. */
+			add_path(joinrel,
+					(Path *) create_append_path(joinrel, alter_append_subpaths, NULL));
+
 			list_free(joinclauses_parent);
-			elog(DEBUG1, "Join pushdown failed.");
+			elog(DEBUG1, "Append pull-up succeeded.");
+		} /* End of foreach(inner_path->pathlist) */
+
+		/*
+		 * We check length of joinrel's pathlist here.
+		 * If it is equal to or lesser than before trying above,
+		 * all inner_paths are not suitable for append pulling-up,
+		 * thus we decide to abort trying anymore.
+		 */
+		if (list_length(joinrel->pathlist) > num_pathlist_join)
+		{
+			elog(DEBUG1, "No paths are added. Abort now.");
 			return;
 		}
-
-		set_cheapest(alter_outer_rel);
-		Assert(alter_outer_rel->cheapest_total_path != NULL);
-		alter_append_subpaths = lappend(alter_append_subpaths,
-									alter_outer_rel->cheapest_total_path);
-	}
-
-	/* Join Pushdown is succeeded. Add path to original joinrel. */
-	add_path(joinrel,
-			(Path *) create_append_path(joinrel, alter_append_subpaths, NULL));
-
-	list_free(joinclauses_parent);
-	elog(DEBUG1, "Join pushdown succeeded.");
+	} /* End of foreach(outer_path->pathlist) */
 }

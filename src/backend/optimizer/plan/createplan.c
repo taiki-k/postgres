@@ -4232,10 +4232,14 @@ prepare_sort_from_pathkeys(PlannerInfo *root, Plan *lefttree, List *pathkeys,
 				 * Ignore child members unless they match the rel being
 				 * sorted.
 				 *
-				 * If this is called from make_sort_from_pathkeys(),
-				 * relids may be NULL. In this case, we must not ignore child
-				 * members because inner/outer plan of pushed-down merge join is
-				 * always child table.
+				 * For append pull-up, we must not ignore child members
+				 * when this is called from make_sort_from_pathkeys().
+				 * Because "em_is_child" fields of all "ec_members" are true
+				 * in this case, thus it may fail to find pathkey
+				 * (and raise an error).
+				 *
+				 * In this condition, "relids" field may be NULL. So we don't
+				 * ignore child members when "relids" field is NULL.
 				 */
 				if (relids != NULL &&
 					em->em_is_child &&
@@ -4352,9 +4356,13 @@ find_ec_member_for_tle(EquivalenceClass *ec,
 		/*
 		 * Ignore child members unless they match the rel being sorted.
 		 *
-		 * If this is called from make_sort_from_pathkeys(), relids may be NULL.
-		 * In this case, we must not ignore child members because inner/outer
-		 * plan of pushed-down merge join is always child table.
+		 * For append pull-up, we must not ignore child members when this is
+		 * called from make_sort_from_pathkeys(). Because "em_is_child" fields
+		 * of all "ec_members" are true in this case, thus it will fail to
+		 * find pathkey (and raise an error).
+		 *
+		 * In this condition, "relids" field may be NULL. So we don't ignore
+		 * child members when "relids" field is NULL.
 		 */
 		if (relids != NULL &&
 			em->em_is_child &&
