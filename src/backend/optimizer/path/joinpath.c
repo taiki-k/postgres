@@ -1790,17 +1790,20 @@ try_append_pullup_across_join(PlannerInfo *root,
 				break;
 			default :
 				{
-					elog(DEBUG1, "Type of Inner path is not supported yet. Give up.");
+					elog(DEBUG1, "Type of Inner path is not supported yet."
+								" Give up.");
 					continue;
 				}
 			}
 
 			/*
-			 * Make new joinrel between each of outer path's sub-paths and inner path.
+			 * Make new joinrel between each of outer path's sub-paths and
+			 * inner path.
 			 */
 			foreach(lc_subpath, outer_path->subpaths)
 			{
-				RelOptInfo	*orig_outer_sub_rel = ((Path *) lfirst(lc_subpath))->parent;
+				RelOptInfo	*orig_outer_sub_rel =
+						((Path *) lfirst(lc_subpath))->parent;
 				RelOptInfo	*alter_outer_sub_rel;
 				Path		*alter_inner_path = NULL;
 				List		*joinclauses_child;
@@ -1823,7 +1826,8 @@ try_append_pullup_across_join(PlannerInfo *root,
 
 				/*
 				 * Make RestrictInfo list from CHECK() constraints of outer table.
-				 * "is_valid" indicates whether making RestrictInfo list succeeded or not.
+				 * "is_valid" indicates whether making RestrictInfo list succeeded
+				 * or not.
 				 */
 				restrictlist_by_check_constr =
 						create_rinfo_from_check_constr(root, joinclauses_child,
@@ -1873,7 +1877,8 @@ try_append_pullup_across_join(PlannerInfo *root,
 						break;
 					case T_BitmapHeapScan :
 						{
-							BitmapHeapPath *bpath = (BitmapHeapPath *) alter_inner_path;
+							BitmapHeapPath *bpath =
+									(BitmapHeapPath *) alter_inner_path;
 
 							cost_bitmap_heap_scan(&bpath->path, root, inner_rel,
 									newppi, bpath->bitmapqual, 1.0);
@@ -1896,11 +1901,29 @@ try_append_pullup_across_join(PlannerInfo *root,
 					 * Append this path to pathlist temporary.
 					 * This path will be removed after returning from make_join_rel().
 					 */
-					inner_rel->pathlist = lappend(inner_rel->pathlist, alter_inner_path);
+					inner_rel->pathlist =
+							lappend(inner_rel->pathlist, alter_inner_path);
 					set_cheapest(inner_rel);
 				}
 
-				/* XXX Add comment here. */
+				/*
+				 * Add relids, which are marked as needed not in child's attribute
+				 * but in parent's one, to child's attribute.
+				 *
+				 * attr_needed[] fields of all RelOptInfo under the Append node
+				 * are originally empty sets, therefore unintentional target list
+				 * is made by build_rel_tlist() for new joinrel; because
+				 * bms_noempty_difference() always returns false for outer
+				 * relation, no target is enumerated for it.
+				 *
+				 * We make really needed relids from parent RelOptInfo, and add
+				 * these relids to child's attr_needed[] to get intended target
+				 * list for new joinrel.
+				 *
+				 * This behavior may be harmless for thinking other paths,
+				 * we don't remove these relids from child after processing
+				 * append pulling-up.
+				 */
 				forboth(parentvars, outer_rel->reltargetlist,
 						childvars, orig_outer_sub_rel->reltargetlist)
 				{
@@ -1961,10 +1984,13 @@ try_append_pullup_across_join(PlannerInfo *root,
 				{
 					/*
 					 * Remove (temporary added) alter_inner_path from pathlist.
-					 * The alter_inner_path may be inner/outer path of JoinPath made
-					 * by make_join_rel() above, thus we must not free alter_inner_path itself.
+					 *
+					 * The alter_inner_path may be inner/outer path of JoinPath
+					 * made by make_join_rel() above, thus we MUST NOT free
+					 * alter_inner_path itself.
 					 */
-					inner_rel->pathlist = list_delete_ptr(inner_rel->pathlist, alter_inner_path);
+					inner_rel->pathlist =
+							list_delete_ptr(inner_rel->pathlist, alter_inner_path);
 					set_cheapest(inner_rel);
 				}
 
