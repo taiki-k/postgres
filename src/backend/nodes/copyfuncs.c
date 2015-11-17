@@ -2031,8 +2031,8 @@ _copyIndexPath(const IndexPath *from)
 }
 
 /*
- * XXX Need to make copy function for BitmapHeapPath
- * and TidPath.
+ * XXX Need to make copy function for BitmapHeapPath, TidPath
+ * and GatherPath.
  */
 
 /*

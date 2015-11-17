@@ -1680,6 +1680,114 @@ extract_join_clauses(List *restrictlist, RelOptInfo *outer_prel,
 }
 
 /*
+ * Copy path node for try_append_pullup_across_join()
+ *
+ * This includes following steps.
+ * (a) Prepare ParamPathInfo for RestrictInfos by CHECK constraints.
+ *     (See comment below.)
+ * (b) Copy path node and specify ParamPathInfo node made at (a) to it.
+ * (c) Re-calculate costs for path node copied at (b).
+ *
+ * NOTE : "nworkers" argument is used for the (Parallel)SeqScan node under
+ * the Gather node, which calls this function recursively. Therefore,
+ * "nworkers" argument should be 0, except for recursive call for
+ * the Gather node.
+ */
+static Path *
+copy_inner_path_for_append_pullup(PlannerInfo *root,
+		Path *orig_inner_path, RelOptInfo *inner_rel,
+		List *restrictlist_by_check_constr, int nworkers)
+{
+	/*
+	 * Prepare ParamPathInfo for RestrictInfos by CHECK constraints.
+	 *
+	 * For specifying additional restrictions to inner path,
+	 * we attach ParamPathInfo not to RelOptInfo but only to Path.
+	 *
+	 * PPI is generally used for parameterizing Scan node under Join node
+	 * for example, the purpose of this usage is to extract rows which
+	 * satisfies join conditions fixed one side.
+	 *
+	 * In this function, PPI is used for specifying additional restrictions
+	 * to inner path, and using join conditions and using converted CHECK()
+	 * constraints differ, however these don't differ from a point that
+	 * it extracts rows. Therefore it looks good to use PPI for this purpose.
+	 *
+	 */
+	ParamPathInfo	*newppi = makeNode(ParamPathInfo);
+	Path			*alter_inner_path;
+
+	newppi->ppi_req_outer = NULL;
+	newppi->ppi_rows =
+			get_parameterized_baserel_size(root,
+											inner_rel,
+											restrictlist_by_check_constr);
+	newppi->ppi_clauses = restrictlist_by_check_constr;
+
+	/* Copy Path of inner relation, and specify newppi to it. */
+	alter_inner_path = copyObject(orig_inner_path);
+	alter_inner_path->param_info = newppi;
+
+	/* Re-calculate costs of alter_inner_path */
+	switch (orig_inner_path->pathtype)
+	{
+	case T_SeqScan :
+		cost_seqscan(alter_inner_path, root, inner_rel, newppi, nworkers);
+		break;
+	case T_SampleScan :
+		cost_samplescan(alter_inner_path, root, inner_rel, newppi);
+		break;
+	case T_IndexScan :
+	case T_IndexOnlyScan :
+		{
+			IndexPath *ipath = (IndexPath *) alter_inner_path;
+
+			cost_index(ipath, root, 1.0);
+		}
+		break;
+	case T_BitmapHeapScan :
+		{
+			BitmapHeapPath *bpath =
+					(BitmapHeapPath *) alter_inner_path;
+
+			cost_bitmap_heap_scan(&bpath->path, root, inner_rel,
+					newppi, bpath->bitmapqual, 1.0);
+		}
+		break;
+	case T_TidScan :
+		{
+			TidPath *tpath = (TidPath *) alter_inner_path;
+
+			cost_tidscan(&tpath->path, root, inner_rel,
+					tpath->tidquals, newppi);
+		}
+		break;
+	case T_Gather :
+		{
+			GatherPath	*orig_gpath = (GatherPath *) orig_inner_path;
+			GatherPath	*alter_gpath = (GatherPath *) alter_inner_path;
+
+			Path	*alter_sub_path =
+					copy_inner_path_for_append_pullup(root,
+														orig_gpath->subpath,
+														inner_rel,
+														restrictlist_by_check_constr,
+														orig_gpath->num_workers);
+
+			alter_gpath->subpath = alter_sub_path;
+
+			cost_gather(alter_gpath, root, inner_rel, newppi);
+		}
+		break;
+	default:
+		Assert(false);
+		break;
+	}
+
+	return alter_inner_path;
+}
+
+/*
  * try_append_pullup_across_join
  *
  * When outer-path of JOIN is AppendPath, we can rewrite path-tree with
@@ -1759,6 +1867,12 @@ try_append_pullup_across_join(PlannerInfo *root,
 		return;
 	}
 
+	/*
+	 * We use ParamPathInfo for specifying additional RestrictInfos
+	 * created from CHECK constraints to inner relation. Therefore,
+	 * we can NOT perform append pull-up when PPI has already specified
+	 * to inner relation.
+	 */
 	if (list_length(inner_rel->ppilist) > 0)
 	{
 		elog(DEBUG1, "ParamPathInfo is already set in inner_rel. Can't pull-up.");
@@ -1786,7 +1900,8 @@ try_append_pullup_across_join(PlannerInfo *root,
 			case T_IndexOnlyScan :
 			case T_BitmapHeapScan :
 			case T_TidScan :
-				/* Do nothing. No-op */
+			case T_Gather :
+				/* These types are supported. Pass through. */
 				break;
 			default :
 				{
@@ -1844,58 +1959,12 @@ try_append_pullup_across_join(PlannerInfo *root,
 
 				if (list_length(restrictlist_by_check_constr) > 0)
 				{
-					/* Prepare ParamPathInfo for RestrictInfos by CHECK constraints. */
-					ParamPathInfo *newppi = makeNode(ParamPathInfo);
-
-					newppi->ppi_req_outer = NULL;
-					newppi->ppi_rows =
-							get_parameterized_baserel_size(root,
-															inner_rel,
-															restrictlist_by_check_constr);
-					newppi->ppi_clauses = restrictlist_by_check_constr;
-
 					/* Copy Path of inner relation, and specify newppi to it. */
-					alter_inner_path = copyObject(lfirst(lc_inner_path));
-					alter_inner_path->param_info = newppi;
-
-					/* Re-calculate costs of alter_path */
-					switch (alter_inner_path->pathtype)
-					{
-					case T_SeqScan :
-						cost_seqscan(alter_inner_path, root, inner_rel, newppi);
-						break;
-					case T_SampleScan :
-						cost_samplescan(alter_inner_path, root, inner_rel, newppi);
-						break;
-					case T_IndexScan :
-					case T_IndexOnlyScan :
-						{
-							IndexPath *ipath = (IndexPath *) alter_inner_path;
-
-							cost_index(ipath, root, 1.0);
-						}
-						break;
-					case T_BitmapHeapScan :
-						{
-							BitmapHeapPath *bpath =
-									(BitmapHeapPath *) alter_inner_path;
-
-							cost_bitmap_heap_scan(&bpath->path, root, inner_rel,
-									newppi, bpath->bitmapqual, 1.0);
-						}
-						break;
-					case T_TidScan :
-						{
-							TidPath *tpath = (TidPath *) alter_inner_path;
-
-							cost_tidscan(&tpath->path, root, inner_rel,
-									tpath->tidquals, newppi);
-						}
-						break;
-					default:
-						Assert(false);
-						break;
-					}
+					alter_inner_path = copy_inner_path_for_append_pullup(root,
+													(Path *) lfirst(lc_inner_path),
+													inner_rel,
+													restrictlist_by_check_constr,
+													0);
 
 					/*
 					 * Append this path to pathlist temporary.
@@ -1920,8 +1989,8 @@ try_append_pullup_across_join(PlannerInfo *root,
 				 * these relids to child's attr_needed[] to get intended target
 				 * list for new joinrel.
 				 *
-				 * This behavior may be harmless for thinking other paths,
-				 * we don't remove these relids from child after processing
+				 * This behavior may be harmless for considering other paths,
+				 * so we don't remove these relids from child after processing
 				 * append pulling-up.
 				 */
 				forboth(parentvars, outer_rel->reltargetlist,
