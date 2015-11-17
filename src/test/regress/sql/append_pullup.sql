@@ -111,9 +111,9 @@ create temp table check_test_div_2 (
 check(id > 2000)
 ) inherits(check_test_div);
 
-begin;
-
 -- Table for inner relation is already created.
+
+begin;
 
 insert INTO check_test_div_0
 select (ceil(random()*999))::integer as id, random(), random() as data
