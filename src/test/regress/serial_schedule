@@ -67,6 +67,7 @@ test: create_cast
 test: constraints
 test: triggers
 test: inherit
+test: append_pullup
 test: create_table_like
 test: typed_table
 test: vacuum
