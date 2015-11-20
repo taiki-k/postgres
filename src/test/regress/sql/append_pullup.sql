@@ -108,7 +108,7 @@ check(id between 1000 and 1999)
 ) inherits(check_test_div);
 
 create temp table check_test_div_2 (
-check(id > 2000)
+check(id > 1999)
 ) inherits(check_test_div);
 
 -- Table for inner relation is already created.

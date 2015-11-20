@@ -124,7 +124,7 @@ create temp table check_test_div_1 (
 check(id between 1000 and 1999)
 ) inherits(check_test_div);
 create temp table check_test_div_2 (
-check(id > 2000)
+check(id > 1999)
 ) inherits(check_test_div);
 -- Table for inner relation is already created.
 begin;
@@ -187,7 +187,7 @@ select data_x, data_y, num from check_test_div join inner_t on check_test_div.id
          ->  Seq Scan on check_test_div_2
          ->  Hash
                ->  Seq Scan on inner_t
-                     Filter: (id > 2000)
+                     Filter: (id > 1999)
 (24 rows)
 
 --
