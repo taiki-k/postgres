@@ -101,11 +101,15 @@ add_paths_to_joinrel(PlannerInfo *root,
 	ListCell   *lc;
 
 	/*
-	 * Try to push Join down under Append
+	 * Try to pull-up Append across Join
 	 */
 	if (!IS_OUTER_JOIN(jointype))
 	{
-		try_append_pullup_across_join(root, joinrel, outerrel, innerrel, restrictlist);
+		try_append_pullup_across_join(root,
+									  joinrel,
+									  outerrel,
+									  innerrel,
+									  restrictlist);
 	}
 
 	extra.restrictlist = restrictlist;
